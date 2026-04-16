@@ -1,0 +1,7 @@
+{
+  "total_requests": 10,
+  "concurrency": 4,
+  "successful_requests": 10,
+  "total_time_sec": 0.09343025999987731,
+  "throughput_req_per_sec": 107.03170471764857
+}
