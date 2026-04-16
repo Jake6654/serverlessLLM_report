@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.cache/
+
+# IDE
+.idea/
+
+# Generated plots
+plots/*.png
+figures/*.png
