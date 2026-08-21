@@ -1,1 +1,0 @@
-startup_seconds, 80.0
