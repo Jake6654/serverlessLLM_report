@@ -16,8 +16,8 @@ server:
   host: 127.0.0.1
   port: 8000
   startup_timeout_seconds: 180
-  request_timeout_seconds: 240
-  readiness_poll_interval_seconds: 1.0
+  request_timeout_seconds: 240 # the max time taking to finish one request
+  readiness_poll_interval_seconds: 1.0 # 서버가 준비됐는지 확인하는 간격
 
 request:
   endpoint: /v1/completions
@@ -27,6 +27,8 @@ request:
   stream: true
 
 monitoring:
+  # record the GPU's status every 200ms
+  # GPU utilization, memory, power draw, temp
   gpu_sample_interval_ms: 200
 
 workload:
