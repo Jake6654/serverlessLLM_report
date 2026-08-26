@@ -1,8 +1,8 @@
-"""Data models for deterministic request workload traces."""
+"""Data models and generators for deterministic request workloads."""
 
 from dataclasses import dataclass
 
-
+# A frozenset prevents the supported pattern names from being mutated.
 SUPPORTED_WORKLOAD_PATTERNS = frozenset(
     {"steady", "bursty", "sparse", "mixed"}
 )
@@ -16,6 +16,7 @@ class RequestEvent:
     scheduled_at_seconds: float
     prompt_id: str
 
+    # dataclass __init__이 끝난 직후 자동으로 실행되는 특별한 method
     def __post_init__(self) -> None:
         """Reject invalid request event values immediately."""
 
@@ -55,6 +56,7 @@ class WorkloadTrace:
                 f"pattern must be one of: {supported}"
             )
 
+        # seed must be integer
         if type(self.random_seed) is not int:
             raise ValueError("random_seed must be an integer")
 
@@ -71,6 +73,11 @@ class WorkloadTrace:
         timestamps = [
             event.scheduled_at_seconds for event in self.events
         ]
+
+        # Validate timestamp order.
+        # 0.0 > 10.0 → False
+        # 10.0 > 5.0 → True
+        # Using >= would incorrectly reject simultaneous requests.
         if any(
             current > following
             for current, following in zip(timestamps, timestamps[1:])
@@ -79,6 +86,7 @@ class WorkloadTrace:
                 "events must be ordered by scheduled_at_seconds"
             )
 
+    # A property makes this derived value readable like a field.
     @property
     def total_requests(self) -> int:
         """Return the number of requests in this trace."""
@@ -90,3 +98,70 @@ class WorkloadTrace:
         """Return the scheduled time of the final request."""
 
         return float(self.events[-1].scheduled_at_seconds)
+
+
+def generate_steady_workload(
+    # Parameters after * must be passed by name for readability.
+    *,
+    total_requests: int,
+    interval_seconds: float,
+    random_seed: int,
+    prompt_id: str = "default",
+) -> WorkloadTrace:
+    """Generate requests separated by a fixed time interval.
+
+    The first request is scheduled at zero seconds. Every following
+    request is scheduled exactly ``interval_seconds`` after the
+    previous request.
+
+    Args:
+        total_requests: Total number of request events to generate.
+        interval_seconds: Time between consecutive request arrivals.
+        random_seed: Seed recorded in the generated trace metadata.
+        prompt_id: Identifier of the prompt used by every request.
+
+    Returns:
+        An immutable steady WorkloadTrace.
+
+    Raises:
+        ValueError: If any generator argument is invalid.
+    """
+    if type(total_requests) is not int or total_requests < 1:
+        raise ValueError("total_requests must be a positive integer")
+
+    if (
+        type(interval_seconds) not in (int, float)
+        or interval_seconds <= 0
+    ):
+        raise ValueError("interval_seconds must be a positive number")
+
+    if type(random_seed) is not int:
+        raise ValueError("random_seed must be an integer")
+
+    if not isinstance(prompt_id, str) or not prompt_id.strip():
+        raise ValueError("prompt_id must be a non-empty string")
+
+    # index 0 → float(0 × 5)  → 0.0
+    # index 1 → float(1 × 5)  → 5.0
+    # index 2 → float(2 × 5)  → 10.0
+    # index 3 → float(3 × 5)  → 15.0
+    events = tuple(
+        RequestEvent(
+            request_id=index + 1,
+            scheduled_at_seconds=float(index * interval_seconds),
+            prompt_id=prompt_id,
+        )
+        for index in range(total_requests)
+    )
+
+    trace_name = (
+        f"steady-{float(interval_seconds):g}s-"
+        f"{total_requests}-requests"
+    )
+
+    return WorkloadTrace(
+        name=trace_name,
+        pattern="steady",
+        random_seed=random_seed,
+        events=events,
+    )

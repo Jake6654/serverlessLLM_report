@@ -4,7 +4,11 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
-from serverless_llm.workload import RequestEvent, WorkloadTrace
+from serverless_llm.workload import (
+    RequestEvent,
+    WorkloadTrace,
+    generate_steady_workload,
+)
 
 
 def make_event(request_id: int, scheduled_at_seconds: float) -> RequestEvent:
@@ -39,6 +43,7 @@ def test_request_event_rejects_invalid_values(
     prompt_id: str,
     message: str,
 ) -> None:
+    # The test succeeds only when invalid input raises ValueError.
     with pytest.raises(ValueError, match=message):
         RequestEvent(
             request_id=request_id,
@@ -50,6 +55,7 @@ def test_request_event_rejects_invalid_values(
 def test_request_event_is_immutable() -> None:
     event = make_event(request_id=1, scheduled_at_seconds=0.0)
 
+    # A frozen event must reject field reassignment.
     with pytest.raises(FrozenInstanceError):
         event.scheduled_at_seconds = 10.0
 
@@ -117,4 +123,82 @@ def test_workload_trace_rejects_unknown_pattern() -> None:
             pattern="random",
             random_seed=42,
             events=(make_event(1, 0.0),),
+        )
+
+
+def test_generate_steady_workload_creates_fixed_intervals() -> None:
+    trace = generate_steady_workload(
+        total_requests=4,
+        interval_seconds=5.0,
+        random_seed=42,
+    )
+
+    timestamps = [
+        event.scheduled_at_seconds for event in trace.events
+    ]
+
+    assert timestamps == [0.0, 5.0, 10.0, 15.0]
+    assert trace.total_requests == 4
+    assert trace.duration_seconds == 15.0
+
+
+def test_generate_steady_workload_assigns_sequential_ids() -> None:
+    trace = generate_steady_workload(
+        total_requests=4,
+        interval_seconds=5.0,
+        random_seed=42,
+    )
+
+    request_ids = [event.request_id for event in trace.events]
+
+    assert request_ids == [1, 2, 3, 4]
+
+
+def test_generate_steady_workload_is_deterministic() -> None:
+    first_trace = generate_steady_workload(
+        total_requests=4,
+        interval_seconds=5.0,
+        random_seed=42,
+    )
+    second_trace = generate_steady_workload(
+        total_requests=4,
+        interval_seconds=5.0,
+        random_seed=42,
+    )
+
+    assert first_trace == second_trace
+
+
+def test_generate_steady_workload_uses_prompt_id() -> None:
+    trace = generate_steady_workload(
+        total_requests=3,
+        interval_seconds=5.0,
+        random_seed=42,
+        prompt_id="short",
+    )
+
+    assert all(event.prompt_id == "short" for event in trace.events)
+
+
+@pytest.mark.parametrize("total_requests", [0, -1, 1.5, True])
+def test_generate_steady_workload_rejects_invalid_request_count(
+    total_requests: object,
+) -> None:
+    with pytest.raises(ValueError, match="total_requests"):
+        generate_steady_workload(
+            total_requests=total_requests,
+            interval_seconds=5.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize("interval_seconds", [0, -1.0, "5", True])
+def test_generate_steady_workload_rejects_invalid_interval(
+    interval_seconds: object,
+) -> None:
+    with pytest.raises(ValueError, match="interval_seconds"):
+        generate_steady_workload(
+            total_requests=4,
+            interval_seconds=interval_seconds,
+            random_seed=42,
         )
