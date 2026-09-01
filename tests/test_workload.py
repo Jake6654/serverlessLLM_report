@@ -43,7 +43,7 @@ def test_request_event_rejects_invalid_values(
     prompt_id: str,
     message: str,
 ) -> None:
-    # The test succeeds only when invalid input raises ValueError.
+    # ValueError 가 발생하야 성공
     with pytest.raises(ValueError, match=message):
         RequestEvent(
             request_id=request_id,
@@ -55,7 +55,8 @@ def test_request_event_rejects_invalid_values(
 def test_request_event_is_immutable() -> None:
     event = make_event(request_id=1, scheduled_at_seconds=0.0)
 
-    # A frozen event must reject field reassignment.
+    # Since event is imuutable, when user tries to change the value
+    # it raises the error 
     with pytest.raises(FrozenInstanceError):
         event.scheduled_at_seconds = 10.0
 
@@ -125,7 +126,6 @@ def test_workload_trace_rejects_unknown_pattern() -> None:
             events=(make_event(1, 0.0),),
         )
 
-
 def test_generate_steady_workload_creates_fixed_intervals() -> None:
     trace = generate_steady_workload(
         total_requests=4,
@@ -153,7 +153,7 @@ def test_generate_steady_workload_assigns_sequential_ids() -> None:
 
     assert request_ids == [1, 2, 3, 4]
 
-
+# field 가 가 모두 같으면 두 객체가 같다고 판단한다
 def test_generate_steady_workload_is_deterministic() -> None:
     first_trace = generate_steady_workload(
         total_requests=4,
