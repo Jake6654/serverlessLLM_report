@@ -165,3 +165,114 @@ def generate_steady_workload(
         random_seed=random_seed,
         events=events,
     )
+
+def generate_bursty_workload(
+    *,
+    burst_count: int,
+    requests_per_burst: int,
+    request_interval_seconds: float,
+    idle_seconds_between_bursts: float,
+    random_seed: int,
+    prompt_id: str = "default",
+) -> WorkloadTrace:
+    """Generate groups of requests separated by long idle periods.
+
+    Requests inside one burst use a short fixed interval. The time
+    between the final request of one burst and the first request of
+    the next burst uses a longer idle interval.
+
+    Args:
+        burst_count: Number of request bursts to generate.
+        requests_per_burst: Number of requests inside each burst.
+        request_interval_seconds: Time between requests in one burst.
+        idle_seconds_between_bursts: Time between consecutive bursts.
+        random_seed: Seed recorded in the trace metadata.
+        prompt_id: Identifier of the prompt used by every request.
+
+    Returns:
+        An immutable bursty WorkloadTrace.
+
+    Raises:
+        ValueError: If any generator argument is invalid.
+    """
+    if type(burst_count) is not int or burst_count < 1:
+        raise ValueError("burst_count must be a positive integer")
+
+    if type(requests_per_burst) is not int or requests_per_burst < 1:
+        raise ValueError(
+            "requests_per_burst must be a positive integer"
+        )
+
+    if (
+        type(request_interval_seconds) not in (int, float)
+        or request_interval_seconds <= 0
+    ):
+        raise ValueError(
+            "request_interval_seconds must be a positive number"
+        )
+
+    if (
+        type(idle_seconds_between_bursts) not in (int, float)
+        or idle_seconds_between_bursts <= 0
+    ):
+        raise ValueError(
+            "idle_seconds_between_bursts must be a positive number"
+        )
+
+    if idle_seconds_between_bursts <= request_interval_seconds:
+        raise ValueError(
+            "idle_seconds_between_bursts must be greater than "
+            "request_interval_seconds"
+        )
+
+    if type(random_seed) is not int:
+        raise ValueError("random_seed must be an integer")
+
+    if not isinstance(prompt_id, str) or not prompt_id.strip():
+        raise ValueError("prompt_id must be a non-empty string")
+
+    # Store generated requests in chronological order.
+    events: list[RequestEvent] = []
+    current_time = 0.0
+    request_id = 1
+
+    # Build one burst at a time on a shared experiment timeline
+    for burst_index in range(burst_count):
+        # Add every request belonging to the current burst
+        for request_index in range(requests_per_burst):
+            events.append(
+                RequestEvent(
+                    request_id=request_id,
+                    scheduled_at_seconds=current_time,
+                    prompt_id=prompt_id,
+                )
+            )
+            request_id += 1
+
+            # Do not add a short interval after the burst's last request.
+            is_last_request = (
+                # 비교 결과를 is_last_request 에 대입해줌
+                request_index == requests_per_burst - 1
+            )
+            if not is_last_request:
+                current_time += float(request_interval_seconds)
+
+            # Do not add an idle period after the final burst.
+            # burst_index starts from 0, so need to -1
+        is_last_burst = burst_index == burst_count - 1
+        if not is_last_burst:
+            current_time += float(idle_seconds_between_bursts)
+
+    total_requests = burst_count * requests_per_burst
+    trace_name = (
+        f"bursty-{burst_count}-bursts-"
+        f"{total_requests}-requests"
+    )
+
+    return WorkloadTrace(
+        name=trace_name,
+        pattern="bursty",
+        random_seed=random_seed,
+        # Freeze the completed event list so it cannot be changed later.
+        events=tuple(events),
+    )

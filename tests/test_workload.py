@@ -8,6 +8,7 @@ from serverless_llm.workload import (
     RequestEvent,
     WorkloadTrace,
     generate_steady_workload,
+    generate_bursty_workload
 )
 
 
@@ -200,5 +201,129 @@ def test_generate_steady_workload_rejects_invalid_interval(
         generate_steady_workload(
             total_requests=4,
             interval_seconds=interval_seconds,
+            random_seed=42,
+        )
+
+
+def test_generate_bursty_workload_creates_bursts() -> None:
+    trace = generate_bursty_workload(
+        burst_count=2,
+        requests_per_burst=3,
+        request_interval_seconds=1.0,
+        idle_seconds_between_bursts=10.0,
+        random_seed=42,
+    )
+
+    timestamps = [
+        event.scheduled_at_seconds for event in trace.events
+    ]
+
+    assert timestamps == [0.0, 1.0, 2.0, 12.0, 13.0, 14.0]
+    assert trace.pattern == "bursty"
+    assert trace.total_requests == 6
+    assert trace.duration_seconds == 14.0
+
+
+def test_generate_bursty_workload_assigns_sequential_ids() -> None:
+    trace = generate_bursty_workload(
+        burst_count=2,
+        requests_per_burst=3,
+        request_interval_seconds=1.0,
+        idle_seconds_between_bursts=10.0,
+        random_seed=42,
+    )
+
+    request_ids = [event.request_id for event in trace.events]
+
+    assert request_ids == [1, 2, 3, 4, 5, 6]
+
+
+def test_generate_bursty_workload_is_deterministic() -> None:
+    arguments = {
+        "burst_count": 2,
+        "requests_per_burst": 3,
+        "request_interval_seconds": 1.0,
+        "idle_seconds_between_bursts": 10.0,
+        "random_seed": 42,
+    }
+
+    first_trace = generate_bursty_workload(**arguments)
+    second_trace = generate_bursty_workload(**arguments)
+
+    assert first_trace == second_trace
+
+
+@pytest.mark.parametrize("burst_count", [0, -1, 1.5, True])
+def test_generate_bursty_workload_rejects_invalid_burst_count(
+    burst_count: object,
+) -> None:
+    with pytest.raises(ValueError, match="burst_count"):
+        generate_bursty_workload(
+            burst_count=burst_count,
+            requests_per_burst=3,
+            request_interval_seconds=1.0,
+            idle_seconds_between_bursts=10.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize("requests_per_burst", [0, -1, 1.5, True])
+def test_generate_bursty_workload_rejects_invalid_burst_size(
+    requests_per_burst: object,
+) -> None:
+    with pytest.raises(ValueError, match="requests_per_burst"):
+        generate_bursty_workload(
+            burst_count=2,
+            requests_per_burst=requests_per_burst,
+            request_interval_seconds=1.0,
+            idle_seconds_between_bursts=10.0,
+            random_seed=42,
+        )
+
+
+def test_generate_bursty_workload_rejects_short_idle_period() -> None:
+    with pytest.raises(
+        ValueError,
+        match="idle_seconds_between_bursts must be greater",
+    ):
+        generate_bursty_workload(
+            burst_count=2,
+            requests_per_burst=3,
+            request_interval_seconds=5.0,
+            idle_seconds_between_bursts=5.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize(
+    "request_interval_seconds",
+    [0, -1.0, "1", True],
+)
+def test_generate_bursty_workload_rejects_invalid_request_interval(
+    request_interval_seconds: object,
+) -> None:
+    with pytest.raises(ValueError, match="request_interval_seconds"):
+        generate_bursty_workload(
+            burst_count=2,
+            requests_per_burst=3,
+            request_interval_seconds=request_interval_seconds,
+            idle_seconds_between_bursts=10.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize(
+    "idle_seconds_between_bursts",
+    [0, -1.0, "10", True],
+)
+def test_generate_bursty_workload_rejects_invalid_idle_period(
+    idle_seconds_between_bursts: object,
+) -> None:
+    with pytest.raises(ValueError, match="idle_seconds_between_bursts"):
+        generate_bursty_workload(
+            burst_count=2,
+            requests_per_burst=3,
+            request_interval_seconds=1.0,
+            idle_seconds_between_bursts=idle_seconds_between_bursts,
             random_seed=42,
         )
