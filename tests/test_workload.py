@@ -9,7 +9,8 @@ from serverless_llm.workload import (
     WorkloadTrace,
     generate_steady_workload,
     generate_bursty_workload,
-    generate_sparse_workload
+    generate_sparse_workload,
+    generate_mixed_workload
 )
 
 
@@ -445,5 +446,129 @@ def test_generate_sparse_workload_rejects_reversed_interval_range() -> None:
             total_requests=4,
             min_interval_seconds=20.0,
             max_interval_seconds=10.0,
+            random_seed=42,
+        )
+
+def test_generate_mixed_workload_combines_all_segments() -> None:
+    trace = generate_mixed_workload(
+        steady_total_requests=3,
+        steady_interval_seconds=5.0,
+        burst_count=2,
+        burst_requests_per_burst=2,
+        burst_request_interval_seconds=1.0,
+        burst_idle_seconds=10.0,
+        sparse_total_requests=3,
+        sparse_min_interval_seconds=15.0,
+        sparse_max_interval_seconds=15.0,
+        transition_interval_seconds=20.0,
+        random_seed=42,
+    )
+
+    timestamps = [
+        event.scheduled_at_seconds for event in trace.events
+    ]
+
+    assert timestamps == [
+        0.0,
+        5.0,
+        10.0,
+        30.0,
+        31.0,
+        41.0,
+        42.0,
+        62.0,
+        77.0,
+        92.0,
+    ]
+    assert trace.pattern == "mixed"
+    assert trace.total_requests == 10
+    assert trace.duration_seconds == 92.0
+
+
+def test_generate_mixed_workload_assigns_unique_sequential_ids() -> None:
+    trace = generate_mixed_workload(
+        steady_total_requests=3,
+        steady_interval_seconds=5.0,
+        burst_count=2,
+        burst_requests_per_burst=2,
+        burst_request_interval_seconds=1.0,
+        burst_idle_seconds=10.0,
+        sparse_total_requests=3,
+        sparse_min_interval_seconds=15.0,
+        sparse_max_interval_seconds=15.0,
+        transition_interval_seconds=20.0,
+        random_seed=42,
+    )
+
+    request_ids = [event.request_id for event in trace.events]
+
+    assert request_ids == list(range(1, 11))
+
+
+def test_generate_mixed_workload_is_deterministic() -> None:
+    arguments = {
+        "steady_total_requests": 3,
+        "steady_interval_seconds": 5.0,
+        "burst_count": 2,
+        "burst_requests_per_burst": 2,
+        "burst_request_interval_seconds": 1.0,
+        "burst_idle_seconds": 10.0,
+        "sparse_total_requests": 3,
+        "sparse_min_interval_seconds": 10.0,
+        "sparse_max_interval_seconds": 20.0,
+        "transition_interval_seconds": 20.0,
+        "random_seed": 42,
+    }
+
+    first_trace = generate_mixed_workload(**arguments)
+    second_trace = generate_mixed_workload(**arguments)
+
+    assert first_trace == second_trace
+
+
+def test_generate_mixed_workload_uses_prompt_id() -> None:
+    trace = generate_mixed_workload(
+        steady_total_requests=2,
+        steady_interval_seconds=5.0,
+        burst_count=1,
+        burst_requests_per_burst=2,
+        burst_request_interval_seconds=1.0,
+        burst_idle_seconds=10.0,
+        sparse_total_requests=2,
+        sparse_min_interval_seconds=10.0,
+        sparse_max_interval_seconds=20.0,
+        transition_interval_seconds=20.0,
+        random_seed=42,
+        prompt_id="short",
+    )
+
+    assert all(
+        event.prompt_id == "short"
+        for event in trace.events
+    )
+
+
+@pytest.mark.parametrize(
+    "transition_interval_seconds",
+    [0, -1.0, "20", True],
+)
+def test_generate_mixed_workload_rejects_invalid_transition(
+    transition_interval_seconds: object,
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="transition_interval_seconds",
+    ):
+        generate_mixed_workload(
+            steady_total_requests=3,
+            steady_interval_seconds=5.0,
+            burst_count=2,
+            burst_requests_per_burst=2,
+            burst_request_interval_seconds=1.0,
+            burst_idle_seconds=10.0,
+            sparse_total_requests=3,
+            sparse_min_interval_seconds=10.0,
+            sparse_max_interval_seconds=20.0,
+            transition_interval_seconds=transition_interval_seconds,
             random_seed=42,
         )

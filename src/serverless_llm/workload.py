@@ -373,3 +373,116 @@ def generate_sparse_workload(
         random_seed=random_seed,
         events=tuple(events),
     )
+
+def generate_mixed_workload(
+        *,
+        steady_total_requests: int,
+    steady_interval_seconds: float,
+    burst_count: int,
+    burst_requests_per_burst: int,
+    burst_request_interval_seconds: float,
+    burst_idle_seconds: float,
+    sparse_total_requests: int,
+    sparse_min_interval_seconds: float,
+    sparse_max_interval_seconds: float,
+    transition_interval_seconds: float,
+    random_seed: int,
+    prompt_id: str = "default",
+) -> WorkloadTrace:
+    """Combine steady, bursty, and sparse traffic into one trace.
+    Each generator first creates a trace starting at zero seconds.
+    This function shifts those local timestamps onto one shared
+    experiment timeline and assigns new sequential request IDs.
+
+    Args:
+        steady_total_requests: Number of requests in the steady segment.
+        steady_interval_seconds: Interval in the steady segment.
+        burst_count: Number of bursts in the bursty segment.
+        burst_requests_per_burst: Requests inside each burst.
+        burst_request_interval_seconds: Interval inside one burst.
+        burst_idle_seconds: Idle time between bursts.
+        sparse_total_requests: Requests in the sparse segment.
+        sparse_min_interval_seconds: Minimum sparse interval.
+        sparse_max_interval_seconds: Maximum sparse interval.
+        transition_interval_seconds: Gap between traffic segments.
+        random_seed: Seed used for deterministic generation.
+        prompt_id: Prompt identifier used by every request.
+
+    Returns:
+        An immutable mixed WorkloadTrace.
+
+    Raises:
+        ValueError: If any generator argument is invalid.
+    """
+
+    if (
+        type(transition_interval_seconds) not in (int, float)
+        or transition_interval_seconds <= 0
+    ):
+        raise ValueError(
+            "transition_interval_seconds must be a positive number"
+        )
+    
+    # Reuse the validated generators instead of duplicating their logic
+    steady_trace = generate_steady_workload(
+        total_requests=steady_total_requests,
+        interval_seconds=steady_interval_seconds,
+        random_seed=random_seed,
+        prompt_id=prompt_id,
+    )
+
+    bursty_trace = generate_bursty_workload(
+        burst_count=burst_count,
+        requests_per_burst=burst_requests_per_burst,
+        request_interval_seconds=burst_request_interval_seconds,
+        idle_seconds_between_bursts=burst_idle_seconds,
+        random_seed=random_seed,
+        prompt_id=prompt_id,
+    )
+
+    sparse_trace = generate_sparse_workload(
+        total_requests=sparse_total_requests,
+        min_interval_seconds=sparse_min_interval_seconds,
+        max_interval_seconds=sparse_max_interval_seconds,
+        random_seed=random_seed,
+        prompt_id=prompt_id,
+    )
+
+    segments = (
+        steady_trace,
+        bursty_trace,
+        sparse_trace,
+    )
+
+    events: list[RequestEvent] = []
+    segment_start_seconds = 0.0
+
+    # Shift every local segment onto the shared experiment timeline
+    for segment_index, segment in enumerate(segments):
+        for source_event in segment.events:
+            events.append(
+                RequestEvent(
+                request_id=len(events) + 1,
+                    scheduled_at_seconds=(
+                        segment_start_seconds
+                        + source_event.scheduled_at_seconds
+                    ),
+                    prompt_id=source_event.prompt_id,
+                )
+            )
+
+        is_last_segment = segment_index == len(segments) - 1
+
+        if not is_last_segment:
+            # Start the next segment after the configured transition gap.
+            segment_start_seconds = (
+                events[-1].scheduled_at_seconds
+                + float(transition_interval_seconds)
+            )
+
+    return WorkloadTrace(
+        name=f"mixed-{len(events)}-requests",
+        pattern="mixed",
+        random_seed=random_seed,
+        events=tuple(events),
+    )
