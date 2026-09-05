@@ -8,7 +8,8 @@ from serverless_llm.workload import (
     RequestEvent,
     WorkloadTrace,
     generate_steady_workload,
-    generate_bursty_workload
+    generate_bursty_workload,
+    generate_sparse_workload
 )
 
 
@@ -325,5 +326,124 @@ def test_generate_bursty_workload_rejects_invalid_idle_period(
             requests_per_burst=3,
             request_interval_seconds=1.0,
             idle_seconds_between_bursts=idle_seconds_between_bursts,
+            random_seed=42,
+        )
+def test_generate_sparse_workload_creates_long_intervals() -> None:
+    trace = generate_sparse_workload(
+        total_requests=4,
+        min_interval_seconds=10.0,
+        max_interval_seconds=20.0,
+        random_seed=42,
+    )
+
+    timestamps = [
+        event.scheduled_at_seconds for event in trace.events
+    ]
+    intervals = [
+        following - current
+        for current, following in zip(
+            timestamps,
+            timestamps[1:],
+        )
+    ]
+
+    assert timestamps[0] == 0.0
+    assert all(10.0 <= interval <= 20.0 for interval in intervals)
+    assert trace.pattern == "sparse"
+    assert trace.total_requests == 4
+
+
+def test_generate_sparse_workload_assigns_sequential_ids() -> None:
+    trace = generate_sparse_workload(
+        total_requests=4,
+        min_interval_seconds=10.0,
+        max_interval_seconds=20.0,
+        random_seed=42,
+    )
+
+    request_ids = [event.request_id for event in trace.events]
+
+    assert request_ids == [1, 2, 3, 4]
+
+
+def test_generate_sparse_workload_is_deterministic() -> None:
+    arguments = {
+        "total_requests": 4,
+        "min_interval_seconds": 10.0,
+        "max_interval_seconds": 20.0,
+        "random_seed": 42,
+    }
+
+    first_trace = generate_sparse_workload(**arguments)
+    second_trace = generate_sparse_workload(**arguments)
+
+    assert first_trace == second_trace
+
+
+def test_generate_sparse_workload_changes_with_seed() -> None:
+    first_trace = generate_sparse_workload(
+        total_requests=4,
+        min_interval_seconds=10.0,
+        max_interval_seconds=20.0,
+        random_seed=42,
+    )
+    second_trace = generate_sparse_workload(
+        total_requests=4,
+        min_interval_seconds=10.0,
+        max_interval_seconds=20.0,
+        random_seed=100,
+    )
+
+    assert first_trace.events != second_trace.events
+
+
+@pytest.mark.parametrize("total_requests", [0, -1, 1.5, True])
+def test_generate_sparse_workload_rejects_invalid_request_count(
+    total_requests: object,
+) -> None:
+    with pytest.raises(ValueError, match="total_requests"):
+        generate_sparse_workload(
+            total_requests=total_requests,
+            min_interval_seconds=10.0,
+            max_interval_seconds=20.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize("min_interval_seconds", [0, -1.0, "10", True])
+def test_generate_sparse_workload_rejects_invalid_minimum_interval(
+    min_interval_seconds: object,
+) -> None:
+    with pytest.raises(ValueError, match="min_interval_seconds"):
+        generate_sparse_workload(
+            total_requests=4,
+            min_interval_seconds=min_interval_seconds,
+            max_interval_seconds=20.0,
+            random_seed=42,
+        )
+
+
+@pytest.mark.parametrize("max_interval_seconds", [0, -1.0, "20", True])
+def test_generate_sparse_workload_rejects_invalid_maximum_interval(
+    max_interval_seconds: object,
+) -> None:
+    with pytest.raises(ValueError, match="max_interval_seconds"):
+        generate_sparse_workload(
+            total_requests=4,
+            min_interval_seconds=10.0,
+            max_interval_seconds=max_interval_seconds,
+            random_seed=42,
+        )
+
+
+def test_generate_sparse_workload_rejects_reversed_interval_range() -> None:
+    with pytest.raises(
+        ValueError,
+        match="max_interval_seconds must be greater",
+    ):
+        generate_sparse_workload(
+            total_requests=4,
+            min_interval_seconds=20.0,
+            max_interval_seconds=10.0,
             random_seed=42,
         )

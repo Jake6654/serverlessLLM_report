@@ -1,6 +1,7 @@
 """Data models and generators for deterministic request workloads."""
 
 from dataclasses import dataclass
+from random import Random
 
 # A frozenset prevents the supported pattern names from being mutated.
 SUPPORTED_WORKLOAD_PATTERNS = frozenset(
@@ -274,5 +275,101 @@ def generate_bursty_workload(
         pattern="bursty",
         random_seed=random_seed,
         # Freeze the completed event list so it cannot be changed later.
+        events=tuple(events),
+    )
+
+
+def generate_sparse_workload(
+        *,
+         total_requests: int,
+    min_interval_seconds: float,
+    max_interval_seconds: float,
+    random_seed: int,
+    prompt_id: str = "default",
+) -> WorkloadTrace:
+    """Generate requests separated by long randomized intervals.
+
+    The first request is scheduled at zero seconds. Every later
+    request uses an interval sampled between the configured minimum
+    and maximum values.
+
+    Args:
+        total_requests: Total number of requests to generate.
+        min_interval_seconds: Smallest allowed request interval.
+        max_interval_seconds: Largest allowed request interval.
+        random_seed: Seed used by the local random number generator.
+        prompt_id: Identifier of the prompt used by every request.
+
+    Returns:
+        An immutable sparse WorkloadTrace.
+
+    Raises:
+        ValueError: If any generator argument is invalid.
+    """
+    if type(total_requests) is not int or total_requests < 1:
+        raise ValueError("total_requests must be a positive integer")
+
+    if (
+        type(min_interval_seconds) not in (int, float)
+        or min_interval_seconds <= 0
+    ):
+        raise ValueError(
+            "min_interval_seconds must be a positive number"
+        )
+
+    if (
+        type(max_interval_seconds) not in (int, float)
+        or max_interval_seconds <= 0
+    ):
+        raise ValueError(
+            "max_interval_seconds must be a positive number"
+        )
+
+    if max_interval_seconds < min_interval_seconds:
+        raise ValueError(
+            "max_interval_seconds must be greater than or equal to "
+            "min_interval_seconds"
+        )
+
+    if type(random_seed) is not int:
+        raise ValueError("random_seed must be an integer")
+
+    if not isinstance(prompt_id, str) or not prompt_id.strip():
+        raise ValueError("prompt_id must be a non-empty string")
+
+    # A local generator prevents other random operations from changing us.
+    rng = Random(random_seed)
+
+    events: list[RequestEvent] = []
+    current_time = 0.0
+
+    for request_id in range(1, total_requests + 1):
+        events.append(
+            RequestEvent(
+                request_id=request_id,
+                scheduled_at_seconds=current_time,
+                prompt_id=prompt_id,
+            )
+        )
+
+        is_last_request = request_id == total_requests
+        if not is_last_request:
+            # Select the next long interval from the configured range.
+            interval_seconds = rng.uniform(
+                float(min_interval_seconds),
+                float(max_interval_seconds),
+            )
+            current_time += interval_seconds
+
+    trace_name = (
+        f"sparse-{float(min_interval_seconds):g}-"
+        f"{float(max_interval_seconds):g}s-"
+        f"{total_requests}-requests"
+    )
+
+    return WorkloadTrace(
+        name=trace_name,
+        pattern="sparse",
+        random_seed=random_seed,
         events=tuple(events),
     )
