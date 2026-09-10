@@ -459,9 +459,12 @@ def generate_mixed_workload(
 
     # Shift every local segment onto the shared experiment timeline
     for segment_index, segment in enumerate(segments):
+        # segment_index = 0, segment = steady_trace....
         for source_event in segment.events:
+            # each trace's id starts from 1 
             events.append(
                 RequestEvent(
+                # 중복을 막기 위해
                 request_id=len(events) + 1,
                     scheduled_at_seconds=(
                         segment_start_seconds
@@ -471,6 +474,7 @@ def generate_mixed_workload(
                 )
             )
 
+        # must do - 1 since index starts from 0
         is_last_segment = segment_index == len(segments) - 1
 
         if not is_last_segment:

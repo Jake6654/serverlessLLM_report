@@ -11,6 +11,10 @@ class ServerState(str, Enum):
   READY = "ready"
 
 
+class InvalidStateTransitionError(RuntimeError):
+    """Raised when the server cannot perform an action in its state."""
+
+
 @dataclass(frozen=True)
 class ServerTiming:
   """Fixed timing assumptuions used by the initial simulator"""
@@ -80,3 +84,53 @@ class SimulatedServer:
             ServerState.STARTING,
             ServerState.READY,
         }
+    
+    def start(self) -> None:
+        """Start loading model from the OFF state"""
+
+        self._require_state(
+            expected=ServerState.OFF,
+            action="start",
+        )
+
+        # Starting beings now, but loading time has not passed yet
+        self.state = ServerState.STARTING
+
+    def mark_ready(self) -> None:
+        """Finishing model loading and move into the READY state."""
+
+        self._require_state(
+            expected=ServerState.STARTING,
+            action="mark ready",
+        )
+
+        # Move the simulation clock forward by the model loading time.
+        self.current_time_seconds += float(
+            self.timing.startup_duration_seconds
+        )
+        self.state = ServerState.READY
+
+    def stop(self) -> None:
+        """Stop a READY server and release its simulated resources."""
+
+        self._require_state(
+            expected=ServerState.READY,
+            action="stop",
+        )
+
+        # Shutdown is instantanueous in the initial simulator
+        self.state = ServerState.OFF
+
+    def _require_state(
+        self,
+        *,
+        expected: ServerState,
+        action: str,
+    ) -> None:
+        """Check that an action is valid in the current state."""
+
+        if self.state is not expected:
+            raise InvalidStateTransitionError(
+                f"cannot {action} server while state is "
+                f"{self.state.value}; expected {expected.value}"
+            )

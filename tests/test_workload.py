@@ -572,3 +572,6 @@ def test_generate_mixed_workload_rejects_invalid_transition(
             transition_interval_seconds=transition_interval_seconds,
             random_seed=42,
         )
+
+
+

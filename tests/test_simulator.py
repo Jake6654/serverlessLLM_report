@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from serverless_llm.simulator import (
+    InvalidStateTransitionError,
     ServerState,
     ServerTiming,
     SimulatedServer,
@@ -118,3 +119,84 @@ def test_simulated_server_rejects_string_state() -> None:
             timing=make_timing(),
             state="off",
         )
+def test_start_moves_off_server_to_starting() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    server.start()
+
+    assert server.state is ServerState.STARTING
+    assert server.current_time_seconds == 0.0
+    assert server.is_running
+    assert not server.is_ready
+
+
+def test_mark_ready_finishes_startup() -> None:
+    server = SimulatedServer(timing=make_timing())
+    server.start()
+
+    server.mark_ready()
+
+    assert server.state is ServerState.READY
+    assert server.current_time_seconds == 12.0
+    assert server.is_ready
+
+
+def test_stop_moves_ready_server_to_off() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.READY,
+        current_time_seconds=12.0,
+    )
+
+    server.stop()
+
+    assert server.state is ServerState.OFF
+    assert server.current_time_seconds == 12.0
+    assert server.is_off
+
+
+def test_server_can_complete_one_lifecycle() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    server.start()
+    server.mark_ready()
+    server.stop()
+
+    assert server.state is ServerState.OFF
+    assert server.current_time_seconds == 12.0
+
+
+def test_start_rejects_server_that_is_already_running() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.READY,
+    )
+
+    with pytest.raises(
+        InvalidStateTransitionError,
+        match="cannot start",
+    ):
+        server.start()
+
+
+def test_mark_ready_rejects_off_server() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    with pytest.raises(
+        InvalidStateTransitionError,
+        match="cannot mark ready",
+    ):
+        server.mark_ready()
+
+
+def test_stop_rejects_starting_server() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.STARTING,
+    )
+
+    with pytest.raises(
+        InvalidStateTransitionError,
+        match="cannot stop",
+    ):
+        server.stop()
