@@ -4,11 +4,11 @@ from dataclasses import dataclass
 from enum import Enum
 
 class ServerState(str, Enum):
-  """Possible lifecycle states of the simulated model server"""
+    """Possible lifecycle states of the simulated model server"""
 
-  OFF = "off"
-  STARTING = "starting"
-  READY = "ready"
+    OFF = "off"
+    STARTING = "starting"
+    READY = "ready"
 
 
 class InvalidStateTransitionError(RuntimeError):
@@ -17,29 +17,93 @@ class InvalidStateTransitionError(RuntimeError):
 
 @dataclass(frozen=True)
 class ServerTiming:
-  """Fixed timing assumptuions used by the initial simulator"""
+    """Fixed timing assumptuions used by the initial simulator"""
 
-  startup_duration_seconds: float
-  request_duration_seconds: float
-  
-  def __post_init__(self) -> None:
-      """Reject invalid timing values immediately."""
+    startup_duration_seconds: float
+    request_duration_seconds: float
+    
+    def __post_init__(self) -> None:
+        """Reject invalid timing values immediately."""
 
-      if (
-          type(self.startup_duration_seconds) not in (int, float) 
-          or self.startup_duration_seconds <=0
-      ):
-          raise ValueError(
-            "startup_duration_seconds must be a positive number"
-        )
-      
-      if (
-            type(self.request_duration_seconds) not in (int, float)
-            or self.request_duration_seconds <= 0
+        if (
+            type(self.startup_duration_seconds) not in (int, float) 
+            or self.startup_duration_seconds <=0
         ):
             raise ValueError(
-                "request_duration_seconds must be a positive number"
+                "startup_duration_seconds must be a positive number"
             )
+        
+        if (
+                type(self.request_duration_seconds) not in (int, float)
+                or self.request_duration_seconds <= 0
+            ):
+                raise ValueError(
+                    "request_duration_seconds must be a positive number"
+                )
+
+@dataclass(frozen=True)
+class RequestResult:
+    """Recorded timing result for one completed request."""
+
+    requet_id: int
+    arrival_time_seconds: float
+    started_at_seconds: float
+    completed_at_seconds: float
+    cold_start: bool
+
+    def __post_init__(self) -> None:
+        """Reject invalid request timing results."""
+
+        if type(self.request_id) is not int or self.request_id < 1:
+            raise ValueError("request_id must be a positive integer")
+
+        if (
+            type(self.arrival_time_seconds) not in (int, float)
+            or self.arrival_time_seconds < 0
+        ):
+            raise ValueError(
+                "arrival_time_seconds must be a non-negative number"
+            )
+
+        if (
+            type(self.started_at_seconds) not in (int, float)
+            or self.started_at_seconds < 0
+        ):
+            raise ValueError(
+                "started_at_seconds must be a non-negative number"
+            )
+
+        if (
+            type(self.completed_at_seconds) not in (int, float)
+            or self.completed_at_seconds < 0
+        ):
+            raise ValueError(
+                "completed_at_seconds must be a non-negative number"
+            )
+
+        if self.started_at_seconds < self.arrival_time_seconds:
+            raise ValueError(
+                "started_at_seconds cannot be earlier than "
+                "arrival_time_seconds"
+            )
+
+        if self.completed_at_seconds < self.started_at_seconds:
+            raise ValueError(
+                "completed_at_seconds cannot be earlier than "
+                "started_at_seconds"
+            )
+
+        if type(self.cold_start) is not bool:
+            raise ValueError("cold_start must be a boolean")
+        
+    @property
+        def waiting_time_seconds(self) -> float:
+            """Return the time spent waiting before processing"""
+
+            return float(
+                self.started_at_seconds - self.arrival_time_seconds
+            )
+
 
 @dataclass
 class SimulatedServer:
@@ -85,6 +149,25 @@ class SimulatedServer:
             ServerState.READY,
         }
     
+    def advance_to(self, target_time_seconds: float) -> None:
+        """Move the simluation clock forward to a target time."""
+
+        if(
+            type(target_time_seconds) not in (int, float)
+            or target_time_seconds < 0
+        ):
+            raise ValueError(
+                "target_time_seconds must be a non-negative number"
+            )
+        
+        if target_time_seconds < self.current_time_seconds:
+            raise ValueError(
+                "target_time_seconds cannot move simulation time backwards"
+            )
+        
+        # Equal timestamps are allowed, but time can never move backwards
+        self.current_time_seconds = float(target_time_seconds)
+    
     def start(self) -> None:
         """Start loading model from the OFF state"""
 
@@ -121,6 +204,7 @@ class SimulatedServer:
         # Shutdown is instantanueous in the initial simulator
         self.state = ServerState.OFF
 
+    # 메서드 앞의 _는 이 메서드가 클래스 내부에서 사용하기 위한 private helper라는 관례이다
     def _require_state(
         self,
         *,

@@ -200,3 +200,100 @@ def test_stop_rejects_starting_server() -> None:
         match="cannot stop",
     ):
         server.stop()
+
+def test_request_result_calculates_latency_components() -> None:
+    result = RequestResult(
+        request_id=1,
+        arrival_time_seconds=10.0,
+        started_at_seconds=22.0,
+        completed_at_seconds=24.0,
+        cold_start=True,
+    )
+
+    assert result.waiting_time_seconds == 12.0
+    assert result.processing_time_seconds == 2.0
+    assert result.total_latency_seconds == 14.0
+    assert result.cold_start
+
+
+def test_request_result_is_immutable() -> None:
+    result = RequestResult(
+        request_id=1,
+        arrival_time_seconds=10.0,
+        started_at_seconds=10.0,
+        completed_at_seconds=12.0,
+        cold_start=False,
+    )
+
+    with pytest.raises(FrozenInstanceError):
+        result.completed_at_seconds = 20.0
+
+
+def test_request_result_rejects_start_before_arrival() -> None:
+    with pytest.raises(
+        ValueError,
+        match="started_at_seconds cannot be earlier",
+    ):
+        RequestResult(
+            request_id=1,
+            arrival_time_seconds=10.0,
+            started_at_seconds=9.0,
+            completed_at_seconds=12.0,
+            cold_start=False,
+        )
+
+
+def test_request_result_rejects_completion_before_start() -> None:
+    with pytest.raises(
+        ValueError,
+        match="completed_at_seconds cannot be earlier",
+    ):
+        RequestResult(
+            request_id=1,
+            arrival_time_seconds=10.0,
+            started_at_seconds=12.0,
+            completed_at_seconds=11.0,
+            cold_start=False,
+        )
+
+
+def test_advance_to_moves_simulation_clock_forward() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        current_time_seconds=5.0,
+    )
+
+    server.advance_to(30.0)
+
+    assert server.current_time_seconds == 30.0
+
+
+def test_advance_to_allows_same_timestamp() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        current_time_seconds=30.0,
+    )
+
+    server.advance_to(30.0)
+
+    assert server.current_time_seconds == 30.0
+
+
+def test_advance_to_rejects_backwards_time() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        current_time_seconds=30.0,
+    )
+
+    with pytest.raises(ValueError, match="cannot move"):
+        server.advance_to(20.0)
+
+
+@pytest.mark.parametrize("target_time_seconds", [-1.0, "30", True])
+def test_advance_to_rejects_invalid_target(
+    target_time_seconds: object,
+) -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    with pytest.raises(ValueError, match="target_time_seconds"):
+        server.advance_to(target_time_seconds)
