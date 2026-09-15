@@ -4,8 +4,10 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from serverless_llm.workload import RequestEvent
 from serverless_llm.simulator import (
     InvalidStateTransitionError,
+    RequestResult,
     ServerState,
     ServerTiming,
     SimulatedServer,
@@ -18,6 +20,18 @@ def make_timing() -> ServerTiming:
     return ServerTiming(
         startup_duration_seconds=12.0,
         request_duration_seconds=2.0,
+    )
+
+def make_request(
+    request_id: int,
+    scheduled_at_seconds: float,
+) -> RequestEvent:
+    """Create a request event for simulator tests."""
+
+    return RequestEvent(
+        request_id=request_id,
+        scheduled_at_seconds=scheduled_at_seconds,
+        prompt_id="default",
     )
 
 
@@ -119,6 +133,8 @@ def test_simulated_server_rejects_string_state() -> None:
             timing=make_timing(),
             state="off",
         )
+
+
 def test_start_moves_off_server_to_starting() -> None:
     server = SimulatedServer(timing=make_timing())
 
@@ -200,6 +216,7 @@ def test_stop_rejects_starting_server() -> None:
         match="cannot stop",
     ):
         server.stop()
+
 
 def test_request_result_calculates_latency_components() -> None:
     result = RequestResult(
@@ -297,3 +314,87 @@ def test_advance_to_rejects_invalid_target(
 
     with pytest.raises(ValueError, match="target_time_seconds"):
         server.advance_to(target_time_seconds)
+
+def test_process_request_handles_cold_start() -> None:
+    server = SimulatedServer(timing=make_timing())
+    event = make_request(
+        request_id=1,
+        scheduled_at_seconds=10.0,
+    )
+
+    result = server.process_request(event)
+
+    assert result.request_id == 1
+    assert result.arrival_time_seconds == 10.0
+    assert result.started_at_seconds == 22.0
+    assert result.completed_at_seconds == 24.0
+    assert result.waiting_time_seconds == 12.0
+    assert result.processing_time_seconds == 2.0
+    assert result.total_latency_seconds == 14.0
+    assert result.cold_start
+    assert server.state is ServerState.READY
+    assert server.current_time_seconds == 24.0
+
+
+def test_process_request_handles_warm_request() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.READY,
+        current_time_seconds=5.0,
+    )
+    event = make_request(
+        request_id=1,
+        scheduled_at_seconds=10.0,
+    )
+
+    result = server.process_request(event)
+
+    assert result.started_at_seconds == 10.0
+    assert result.completed_at_seconds == 12.0
+    assert result.waiting_time_seconds == 0.0
+    assert result.total_latency_seconds == 2.0
+    assert not result.cold_start
+
+
+def test_process_request_queues_request_that_already_arrived() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.READY,
+        current_time_seconds=15.0,
+    )
+    event = make_request(
+        request_id=2,
+        scheduled_at_seconds=12.0,
+    )
+
+    result = server.process_request(event)
+
+    assert result.arrival_time_seconds == 12.0
+    assert result.started_at_seconds == 15.0
+    assert result.completed_at_seconds == 17.0
+    assert result.waiting_time_seconds == 3.0
+    assert not result.cold_start
+
+
+def test_process_request_rejects_starting_server() -> None:
+    server = SimulatedServer(
+        timing=make_timing(),
+        state=ServerState.STARTING,
+    )
+    event = make_request(
+        request_id=1,
+        scheduled_at_seconds=0.0,
+    )
+
+    with pytest.raises(
+        InvalidStateTransitionError,
+        match="while state is starting",
+    ):
+        server.process_request(event)
+
+
+def test_process_request_rejects_non_request_event() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    with pytest.raises(ValueError, match="RequestEvent"):
+        server.process_request("not-an-event")

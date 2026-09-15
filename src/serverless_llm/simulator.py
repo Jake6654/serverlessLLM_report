@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from enum import Enum
 
+from serverless_llm.workload import RequestEvent
+
 class ServerState(str, Enum):
     """Possible lifecycle states of the simulated model server"""
 
@@ -45,7 +47,7 @@ class ServerTiming:
 class RequestResult:
     """Recorded timing result for one completed request."""
 
-    requet_id: int
+    request_id: int
     arrival_time_seconds: float
     started_at_seconds: float
     completed_at_seconds: float
@@ -97,12 +99,28 @@ class RequestResult:
             raise ValueError("cold_start must be a boolean")
         
     @property
-        def waiting_time_seconds(self) -> float:
-            """Return the time spent waiting before processing"""
+    def waiting_time_seconds(self) -> float:
+        """Return the time spent waiting before processing"""
 
-            return float(
-                self.started_at_seconds - self.arrival_time_seconds
-            )
+        return float(
+            self.started_at_seconds - self.arrival_time_seconds
+        )
+    
+    @property
+    def processing_time_seconds(self) -> float:
+        """Return the time spent processing the request"""
+
+        return float(
+            self.completed_at_seconds - self.started_at_seconds
+        )
+    
+    @property
+    def total_latency_seconds(self) -> float:
+        """Return the complete request latency."""
+
+        return float(
+            self.completed_at_seconds - self.arrival_time_seconds
+        )
 
 
 @dataclass
@@ -167,6 +185,46 @@ class SimulatedServer:
         
         # Equal timestamps are allowed, but time can never move backwards
         self.current_time_seconds = float(target_time_seconds)
+    
+    def process_request(self, event: RequestEvent) -> RequestResult:
+        """Process one request and return its simulated timing result."""
+
+        if not isinstance(event, RequestEvent):
+            raise ValueError("event must be a RequestEvent object")
+        
+        arrival_time_seconds = float(event.scheduled_at_seconds)
+
+        # Skip idle time when the request arrives after the current clock
+        if arrival_time_seconds > self.current_time_seconds:
+            self.advance_to(arrival_time_seconds)
+
+        # Remember the original state before a possible server startup
+        cold_start = self.is_off
+        if self.is_off:
+            self.start()
+            self.mark_ready()
+        elif self.state is ServerState.STARTING:
+            raise InvalidStateTransitionError(
+                "cannot process request while state is starting"
+            )
+
+        started_at_seconds = self.current_time_seconds
+
+        # Simulate the time required to run inference
+        self.current_time_seconds += float(
+            self.timing.request_duration_seconds
+        )
+
+        completed_at_seconds = self.current_time_seconds
+
+        return RequestResult(
+            request_id=event.request_id,
+            arrival_time_seconds=arrival_time_seconds,
+            started_at_seconds=started_at_seconds,
+            completed_at_seconds=completed_at_seconds,
+            cold_start=cold_start,
+        )
+
     
     def start(self) -> None:
         """Start loading model from the OFF state"""
