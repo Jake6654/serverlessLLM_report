@@ -63,7 +63,7 @@ def test_run_workload_preserves_arrival_and_processing_times() -> None:
     ] == [14.0, 16.0, 18.0]
 
 
-def test_only_first_request_triggers_cold_start() -> None:
+def test_requests_arriving_during_startup_are_marked_as_cold_starts() -> None:
     server = make_server()
     trace = generate_steady_workload(
         total_requests=3,
@@ -75,8 +75,8 @@ def test_only_first_request_triggers_cold_start() -> None:
 
     assert [result.cold_start for result in results] == [
         True,
-        False,
-        False,
+        True,
+        True,
     ]
     assert server.state is ServerState.READY
     assert server.current_time_seconds == 18.0

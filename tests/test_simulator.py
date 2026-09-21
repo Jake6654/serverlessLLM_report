@@ -11,6 +11,7 @@ from serverless_llm.simulator import (
     ServerState,
     ServerTiming,
     SimulatedServer,
+    LifecycleEvent,
 )
 
 
@@ -398,3 +399,62 @@ def test_process_request_rejects_non_request_event() -> None:
 
     with pytest.raises(ValueError, match="RequestEvent"):
         server.process_request("not-an-event")
+
+def test_server_records_lifecycle_transitions() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    server.advance_to(5.0)
+    server.start()
+    server.mark_ready()
+    server.advance_to(25.0)
+    server.stop()
+
+    assert server.lifecycle_events == (
+        LifecycleEvent(0.0, ServerState.OFF),
+        LifecycleEvent(5.0, ServerState.STARTING),
+        LifecycleEvent(17.0, ServerState.READY),
+        LifecycleEvent(25.0, ServerState.OFF),
+    )
+
+
+def test_lifecycle_events_returns_a_snapshot() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    snapshot = server.lifecycle_events
+    server.start()
+
+    assert snapshot == (
+        LifecycleEvent(0.0, ServerState.OFF),
+    )
+    assert server.lifecycle_events == (
+        LifecycleEvent(0.0, ServerState.OFF),
+        LifecycleEvent(0.0, ServerState.STARTING),
+    )
+
+
+def test_state_at_returns_historical_state() -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    server.advance_to(5.0)
+    server.start()
+    server.mark_ready()
+    server.advance_to(25.0)
+    server.stop()
+
+    assert server.state_at(3.0) is ServerState.OFF
+    assert server.state_at(6.0) is ServerState.STARTING
+    assert server.state_at(20.0) is ServerState.READY
+    assert server.state_at(25.0) is ServerState.OFF
+
+
+@pytest.mark.parametrize(
+    "at_seconds",
+    [-1.0, float("inf"), float("nan"), "5"],
+)
+def test_state_at_rejects_invalid_time(
+    at_seconds: object,
+) -> None:
+    server = SimulatedServer(timing=make_timing())
+
+    with pytest.raises(ValueError, match="at_seconds"):
+        server.state_at(at_seconds)
