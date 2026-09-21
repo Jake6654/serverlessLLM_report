@@ -13,7 +13,7 @@ from serverless_llm.simulator import (
 class SimulationSummary:
   """Comparable metrics for one completed simulation run."""
 
-  total_request: int # Num of requests processed during the simulation
+  total_requests: int # Num of requests processed during the simulation
 
   # Latency threshold used to decide whether a request violated the SLO.
   total_latency_slo_seconds: float
@@ -121,12 +121,12 @@ def summarize_run(
   count = len(results)
 
   latencies = [
-    result.total_latency_secodns
+    result.total_latency_seconds
     for result in results
   ]
 
   # True is trated as 1 and False as 0 by sum()
-  cold_start = sum(
+  cold_count = sum(
     result.cold_start
     for result in results
   )
@@ -261,7 +261,6 @@ def summarize_run(
           idle_warm_time,
       ),
   )
-
 
 
 
