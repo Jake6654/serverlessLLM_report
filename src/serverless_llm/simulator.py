@@ -266,6 +266,7 @@ class SimulatedServer:
         # Remember the original state before a possible server startup
         # ServerState 가 off 이면 True on 이면 False
         cold_start = (
+            # 괄호를 사용한 이유는 코드가 길어졌을 때 여러 줄로 나눠 읽기 쉽게 하기 위해서이다.
             self.state_at(arrival_time_seconds)
             is not ServerState.READY
         )
