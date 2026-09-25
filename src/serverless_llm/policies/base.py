@@ -48,6 +48,8 @@ class WarmPolicy(ABC):
         server: SimulatedServer,
         event: RequestEvent,
         result: RequestResult,
+        *,
+        has_pending_requests: bool,
     ) -> None:
         """Update policy state after one request completes."""
 

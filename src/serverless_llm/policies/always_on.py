@@ -43,7 +43,7 @@ class AlwaysOnPolicy(WarmPolicy):
         # Always-On must never allow a request to trigger startup
         if not server.is_ready:
             raise InvalidStateTransitionError(
-                "always-on policy requires the server to be READY"
+                "always-on policy requires the server to be READY "
                 "before every request"
             )
         
@@ -53,6 +53,8 @@ class AlwaysOnPolicy(WarmPolicy):
             server: SimulatedServer,
             event: RequestEvent,
             result: RequestResult,
+            *,
+            has_pending_requests: bool,
     ) -> None:
         """Keep the server ready after a reuqest completes"""
 

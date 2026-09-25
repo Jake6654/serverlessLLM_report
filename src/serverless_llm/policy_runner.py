@@ -52,12 +52,9 @@ def run_policy_workload(
     # For always-On, this is after model startup has completed
     workload_started_at_seconds = server.current_time_seconds
 
-    # Results are collected incrementally while requests are processed/
-    results: list[RequestResult] = []
-
-    for relative_event in trace.events:
-        # replace 는 기존 객체의 나머지 필드는 그대로 복사하고 지정한 필드만 바꾼 새로운 객체를 만든다
-        absolute_event: RequestEvent = replace(
+    # Convert every relative trace event into an absolute simulation event
+    absolute_events = tuple(
+        replace(
             relative_event,
             scheduled_at_seconds =(
                 workload_started_at_seconds
@@ -65,6 +62,13 @@ def run_policy_workload(
             ),
         )
 
+        for relative_event in trace.events
+    )
+
+    # Results are collected incrementally while requests are processed/
+    results: list[RequestResult] = []
+
+    for index, absolute_event in enumerate(absolute_events):
         # Apply policy actions that must happen before this request
         policy.before_request(
             server,
@@ -76,11 +80,25 @@ def run_policy_workload(
             absolute_event
         )
 
+        # Because events are ordered, checking the next event is enough
+        # last request cannot over the length of list
+        if index + 1 < len(absolute_events):
+            next_event = absolute_events[index + 1]
+
+            has_pending_requests = (
+                next_event.scheduled_at_seconds <= result.completed_at_seconds
+            )
+
+        else:
+            has_pending_requests = False
+
+
         # Let the policy react to request completion
         policy.after_request(
             server,
             absolute_event,
             result,
+            has_pending_requests=has_pending_requests,
         )
 
 
