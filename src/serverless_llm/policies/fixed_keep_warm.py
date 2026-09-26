@@ -92,7 +92,7 @@ class FixedKeepWarmPolicy(WarmPolicy):
         # Requests at exactly the dealine are processed while warm
         if event.scheduled_at_seconds > deadline:
             # The timeout happened before request arrived
-            server.advance_to(self.timeout_seconds)
+            server.advance_to(deadline)
             server.stop()
 
         # Whether the request arrived before or after the deadline,
@@ -126,7 +126,7 @@ class FixedKeepWarmPolicy(WarmPolicy):
             return
 
         # The queue is empty, so begin the fixed keep-warm window.
-        self.shutdown_deadline_seconds = (
+        self._shutdown_deadline_seconds = (
             result.completed_at_seconds
             + self.timeout_seconds
         )
