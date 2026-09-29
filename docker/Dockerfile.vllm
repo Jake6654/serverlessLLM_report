@@ -1,0 +1,18 @@
+
+# The vLLM version is a build-time setting.
+# Pinning it prevents the inference runtime from changing between runs
+ARG VLLM_VERSION=0.19.0
+
+# Use the official OpenAI-compatible vLLM server image.
+FROM vllm/vllm-openai:v${VLLM_VERSION}
+
+LABEL org.opencontainers.image.title="serverless-llm-vllm"
+LABEL org.opencontainers.image.description="Pinned vLLM server for baseline experiments"
+
+# Document the port used by the vLLM OpenAI-compatible API.
+# EXPOSE does not publish the port by itself.
+EXPOSE 8000
+
+# The base image already uses `vllm serve` as its entrypoint.
+# These arguments become the default vLLM server configuration.
+CMD ["--model", "TinyLlama/TinyLlama-1.1B-Chat-v1.0", "--revision", "fe8a4ea1ffedaf415f4da2f062534de366a451e6", "--host", "0.0.0.0", "--port", "8000", "--dtype", "bfloat16", "--max-model-len", "2048", "--tensor-parallel-size", "1", "--pipeline-parallel-size", "1", "--gpu-memory-utilization", "0.9", "--max-num-seqs", "16", "--kv-cache-dtype", "auto", "--seed", "42"]
