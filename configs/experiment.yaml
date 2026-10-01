@@ -59,3 +59,9 @@ metrics:
 
 output:
   results_directory: results
+
+docker:
+  image: serverless-llm-vllm:0.19.0
+  container_name: serverless-llm-vllm
+  huggingface_cache_volume: serverless-llm-hf-cache
+  container_port: 8000

@@ -171,3 +171,30 @@ def test_multiple_validation_errors_are_reported(
     assert "model.max_model_len" in message
     assert "model.gpu_memory_utilization" in message
     assert "server.port" in message
+
+def test_loader_creates_docker_config(
+    valid_config: ExperimentConfig,
+) -> None:
+    assert valid_config.docker.image == (
+        "serverless-llm-vllm:0.19.0"
+    )
+    assert valid_config.docker.container_name == (
+        "serverless-llm-vllm"
+    )
+    assert valid_config.docker.huggingface_cache_volume == (
+        "serverless-llm-hf-cache"
+    )
+    assert valid_config.docker.container_port == 8000
+
+def test_invalid_docker_container_port_is_rejected(
+    tmp_path: Path,
+    valid_config_data: dict,
+) -> None:
+    valid_config_data["docker"]["container_port"] = 70000
+    path = write_yaml(tmp_path, valid_config_data)
+
+    with pytest.raises(
+        ConfigValidationError,
+        match="docker.container_port",
+    ):
+        load_config(path)

@@ -126,6 +126,15 @@ class OutputConfig:
 
     results_directory: Path
 
+@dataclass(frozen=True)
+class DockerConfig:
+    """Docker settings for the real vLLM runtime"""
+
+    image: str
+    container_name: str
+    huggingface_cache_volume: str
+    container_port: int
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
@@ -134,12 +143,15 @@ class ExperimentConfig:
     experiment: ExperimentSettings
     model: ModelConfig
     server: ServerConfig
+    docker: DockerConfig
     request: RequestConfig
     monitoring: MonitoringConfig
     workload: WorkloadConfig
     policies: PoliciesConfig
     metrics: MetricsConfig
     output: OutputConfig
+
+
 
 
 class ConfigLoadError(ValueError):
@@ -180,6 +192,7 @@ def validate_config(config: ExperimentConfig) -> None:
     experiment = config.experiment
     model = config.model
     server = config.server
+    docker = config.docker
     request = config.request
     monitoring = config.monitoring
     workload = config.workload
@@ -188,6 +201,25 @@ def validate_config(config: ExperimentConfig) -> None:
     ml = config.policies.ml_based
     metrics = config.metrics
     output = config.output
+
+    #docker conig
+    check(
+    _is_nonempty_string(docker.image),
+    "docker.image must be a non-empty string",
+    )
+    check(
+    _is_nonempty_string(docker.container_name),
+    "docker.container_name must be a non-empty string",
+    )
+    check(
+    _is_nonempty_string(docker.huggingface_cache_volume),
+    "docker.huggingface_cache_volume must be a non-empty string",
+    )
+    check(
+    _is_integer(docker.container_port)
+    and 1 <= docker.container_port <= 65535,
+    "docker.container_port must be an integer between 1 and 65535",
+    )
 
     # Experiment settings
     check(
@@ -479,6 +511,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
             experiment=ExperimentSettings(**raw_config["experiment"]),
             model=ModelConfig(**raw_config["model"]),
             server=ServerConfig(**raw_config["server"]),
+            docker=DockerConfig(**raw_config["docker"]),
             request=RequestConfig(**raw_config["request"]),
             monitoring=MonitoringConfig(**raw_config["monitoring"]),
             workload=WorkloadConfig(**raw_config["workload"]),
