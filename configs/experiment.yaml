@@ -21,7 +21,7 @@ server:
 
 request:
   endpoint: /v1/completions
-  prompt: "Explain serverless computing in one sentence."
+  prompt: "Serverless computing is"
   max_tokens: 32
   temperature: 0.0
   stream: true
