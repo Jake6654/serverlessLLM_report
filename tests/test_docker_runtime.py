@@ -442,3 +442,27 @@ def test_start_and_wait_stops_container_after_readiness_failure(
 
     start.assert_called_once_with()
     stop.assert_called_once_with()
+
+@pytest.mark.parametrize(
+    "connection_error",
+    [
+        URLError("connection refused"),
+        TimeoutError("health check timed out"),
+        ConnectionResetError(
+            104,
+            "Connection reset by peer",
+        ),
+    ],
+)
+def test_is_ready_returns_false_for_transient_connection_errors(
+    runtime: DockerVLLMRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+    connection_error: Exception,
+) -> None:
+    monkeypatch.setattr(
+        docker_runtime_module,
+        "urlopen",
+        Mock(side_effect=connection_error),
+    )
+
+    assert runtime._is_ready() is False

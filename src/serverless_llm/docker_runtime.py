@@ -191,7 +191,7 @@ class DockerVLLMRuntime:
         try:
             with urlopen(self.health_url, timeout=1.0) as response:
                 return response.status == 200
-        except (URLError, TimeoutError):
+        except (URLError, TimeoutError, ConnectionError):
             return False
 
     # Poll three conditions in order: the deadline has not expired, Docker is
