@@ -77,6 +77,7 @@ class DockerVLLMRuntime:
         )
 
         return [
+            # docker CLI 의 컨테이너 생성 명령
             "docker",
             "run",
             "--detach",
@@ -94,9 +95,7 @@ class DockerVLLMRuntime:
             self._docker_config.image,
         ]
 
-    # Execute Docker in one shared helper so start, inspect, and stop capture
-    # stdout and stderr consistently. Convert OS errors into a runtime error
-    # that callers can handle without knowing subprocess details.
+  
     @staticmethod
     def _run_docker_command(
         command: list[str],
@@ -104,11 +103,13 @@ class DockerVLLMRuntime:
         """Execute one Docker command and return the completed process."""
 
         try:
+            #subprocess.run 은 전달받은 리스트의 첫 번째 문자열을 실행할 프로그램 이름으로 해석한다
+            # subprocess.run 은 Python이 외부 프로그램을 실행하는 함수이다
             return subprocess.run(
-                command,
+                command, # -> 여기서는 docker
                 capture_output=True,
-                text=True,
-                check=False,
+                text=True, # 출력을 byte 가 아닌 문자열로 변환
+                check=False, # 명령이 실패해도 자동으로 예외를 발생시키지 않고 아래에서 직접확인
             )
         except OSError as error:
             raise DockerRuntimeError(
@@ -167,6 +168,8 @@ class DockerVLLMRuntime:
             return
 
         completed = self._run_docker_command(
+            # -> subprocess.run(["docker", "stop", "serverless-llm-vllm"])
+            # 실행 프로그램 docker, docker subcommand: stop, argument: serverless-llm-vllm
             [
                 "docker",
                 "stop",
