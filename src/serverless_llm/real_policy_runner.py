@@ -613,7 +613,7 @@ def run_real_fixed_keep_warm_workload(
             startup_duration_seconds: float | None = None
 
             if cold_start:
-                startup_results = runtime.start_and_wait()
+                startup_result = runtime.start_and_wait()
                 startup_results.append(startup_result)
 
                 startup_duration_seconds = (
@@ -667,5 +667,4 @@ def run_real_fixed_keep_warm_workload(
         request_results=tuple(request_results),
         gpu_samples=monitor.samples,
     )
-
 
