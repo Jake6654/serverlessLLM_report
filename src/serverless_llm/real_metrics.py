@@ -53,6 +53,98 @@ class NormalizedRunTimeline:
     request_timings: tuple[RelativeRequestTiming, ...]
     gpu_samples: tuple[RelativeGPUSample, ...]
 
+@dataclass(frozen=True)
+class RealRequestMetrics:
+    """Store comparable performance metrics for one real request"""
+
+    request_id: int
+    prompt_id: str
+    cold_start: bool
+    startup_duration_seconds: float | None
+    scheduling_delay_seconds: float
+    pre_inference_delay_seconds: float
+    client_ttft_seconds: float
+    end_to_end_ttft_seconds: float
+    generation_duration_seconds: float
+    client_latency_seconds: float
+    end_to_end_latency_seconds: float
+    finish_reason: str | None
+
+    def __post_init__(self) -> None:
+        """Reject invalid request metric values."""
+
+        if type(self.request_id) is not int or self.request_id < 1:
+            raise ValueError(
+                "request_id must be a positive integer"
+            )
+
+        if (
+            not isinstance(self.prompt_id, str)
+            or not self.prompt_id.strip()
+        ):
+            raise ValueError(
+                "prompt_id must be a non-empty string"
+            )
+
+        if type(self.cold_start) is not bool:
+            raise ValueError(
+                "cold_start must be a boolean"
+            )
+
+        if self.startup_duration_seconds is not None:
+            if (
+                type(self.startup_duration_seconds)
+                not in (int, float)
+                or not isfinite(self.startup_duration_seconds)
+                or self.startup_duration_seconds < 0
+            ):
+                raise ValueError(
+                    "startup_duration_seconds must be null or a "
+                    "finite non-negative number"
+                )
+
+        if self.cold_start and self.startup_duration_seconds is None:
+            raise ValueError(
+                "a cold-start request must include startup duration"
+            )
+
+        if (
+            not self.cold_start
+            and self.startup_duration_seconds is not None
+        ):
+            raise ValueError(
+                "a warm request must not include startup duration"
+            )
+
+        durations = (
+            self.scheduling_delay_seconds,
+            self.pre_inference_delay_seconds,
+            self.client_ttft_seconds,
+            self.end_to_end_ttft_seconds,
+            self.generation_duration_seconds,
+            self.client_latency_seconds,
+            self.end_to_end_latency_seconds,
+        )
+
+        if any(
+            type(duration) not in (int, float)
+            or not isfinite(duration)
+            or duration < 0
+            for duration in durations
+        ):
+            raise ValueError(
+                "request durations must be finite "
+                "non-negative numbers"
+            )
+
+        if (
+            self.finish_reason is not None
+            and not isinstance(self.finish_reason, str)
+        ):
+            raise ValueError(
+                "finish_reason must be a string or null"
+            )
+
 
 def _seconds_since(
       timestamp_seconds: float,
@@ -183,3 +275,53 @@ def normalize_run_timeline(
         request_timings=request_timings,
         gpu_samples=gpu_samples,
     )
+
+def calculate_request_metrics(
+    run_result: RealPolicyRunResult,
+) -> tuple[RealRequestMetrics, ...]:
+    """Calculate comparable metrics for every request in a real run."""
+
+    if not isinstance(run_result, RealPolicyRunResult):
+        raise ValueError(
+            "run_result must be a RealPolicyRunResult object"
+        )
+
+    request_metrics_list: list[RealRequestMetrics] = []
+
+    for request_result in run_result.request_results:
+        completion = request_result.completion
+
+        request_metrics = RealRequestMetrics(
+            request_id=request_result.request_id,
+            prompt_id=request_result.event.prompt_id,
+            cold_start=request_result.cold_start,
+            startup_duration_seconds=(
+                request_result.startup_duration_seconds
+            ),
+            scheduling_delay_seconds=(
+                request_result.scheduling_delay_seconds
+            ),
+            pre_inference_delay_seconds=(
+                request_result.pre_inference_delay_seconds
+            ),
+            client_ttft_seconds=completion.ttft_seconds,
+            end_to_end_ttft_seconds=(
+                request_result.end_to_end_ttft_seconds
+            ),
+            generation_duration_seconds=(
+                completion.generation_duration_seconds
+            ),
+            client_latency_seconds=(
+                completion.total_latency_seconds
+            ),
+            end_to_end_latency_seconds=(
+                request_result.end_to_end_latency_seconds
+            ),
+            finish_reason=completion.finish_reason,
+        )
+
+        request_metrics_list.append(request_metrics)
+
+    return tuple(request_metrics_list)
+
+
