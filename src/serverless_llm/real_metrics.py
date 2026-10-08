@@ -2,7 +2,7 @@
 
 
 from dataclasses import dataclass
-from math import isfinite
+from math import isfinite, floor
 
 from serverless_llm.real_policy_runner import (
     RealPolicyRunResult,
@@ -145,6 +145,358 @@ class RealRequestMetrics:
                 "finish_reason must be a string or null"
             )
 
+@dataclass(frozen=True)
+class RealStartupSummary:
+    """Store cold-start and server-startup metrics for one real run."""
+
+    total_requests: int
+    cold_start_count: int
+    cold_start_rate: float
+    startup_count: int
+    total_startup_time_seconds: float
+    mean_startup_time_seconds: float | None
+    p50_startup_time_seconds: float | None # 중앙값
+    p95_startup_time_seconds: float | None # tail latency
+    # 전체 서버 시작의 약 95%가 68초 이내에 완료됐고, 나머지 약 5%는 68초보다 오래 걸렸다.
+    # 평균과 무언이 다르냐? 한번의 요청이 심하게 오래 걸릴 가능성이 있기 때문에
+    # 그 값을 기록하기 위한 용도
+
+    def __post_init__(self) -> None:
+        """Reject invalid startup summary values."""
+
+        if type(self.total_requests) is not int or self.total_requests < 1:
+            raise ValueError(
+                "total_requests must be a positive integer"
+            )
+
+        if (
+            type(self.cold_start_count) is not int
+            or not 0 <= self.cold_start_count <= self.total_requests
+        ):
+            raise ValueError(
+                "cold_start_count must be between zero "
+                "and total_requests"
+            )
+
+        if (
+            type(self.cold_start_rate) not in (int, float)
+            or not isfinite(self.cold_start_rate)
+            or not 0 <= self.cold_start_rate <= 1
+        ):
+            raise ValueError(
+                "cold_start_rate must be a finite number "
+                "between zero and one"
+            )
+
+        if type(self.startup_count) is not int or self.startup_count < 0:
+            raise ValueError(
+                "startup_count must be a non-negative integer"
+            )
+
+        if (
+            type(self.total_startup_time_seconds) not in (int, float)
+            or not isfinite(self.total_startup_time_seconds)
+            or self.total_startup_time_seconds < 0
+        ):
+            raise ValueError(
+                "total_startup_time_seconds must be a finite "
+                "non-negative number"
+            )
+
+        optional_startup_metrics = (
+            self.mean_startup_time_seconds,
+            self.p50_startup_time_seconds,
+            self.p95_startup_time_seconds,
+        )
+
+        for metric in optional_startup_metrics:
+            if metric is not None and (
+                type(metric) not in (int, float)
+                or not isfinite(metric)
+                or metric < 0
+            ):
+                raise ValueError(
+                    "startup statistics must be null or finite "
+                    "non-negative numbers"
+                )
+
+        if self.startup_count == 0:
+            if any(
+                metric is not None
+                for metric in optional_startup_metrics
+            ):
+                raise ValueError(
+                    "startup statistics must be null when "
+                    "startup_count is zero"
+                )
+
+        if self.startup_count > 0:
+            if any(
+                metric is None
+                for metric in optional_startup_metrics
+            ):
+                raise ValueError(
+                    "startup statistics are required when "
+                    "startup_count is positive"
+                )
+
+
+@dataclass(frozen=True)
+class RealGPUSummary:
+    """Store aggregate GPU and estimated energy metrics for one real run."""
+
+    sample_count: int
+    monitoring_duration_seconds: float
+    mean_utilization_percent: float | None
+    peak_utilization_percent: float | None
+    mean_memory_used_mib: float | None
+    peak_memory_used_mib: float | None
+    mean_power_draw_watts: float | None
+    peak_power_draw_watts: float | None
+    mean_temperature_celsius: float | None
+    peak_temperature_celsius: float | None
+    estimated_energy_joules: float
+    estimated_energy_watt_hours: float
+
+    def __post_init__(self) -> None:
+        """Reject inconsistent GPU summary values."""
+
+        if type(self.sample_count) is not int or self.sample_count < 0:
+            raise ValueError(
+                "sample_count must be a non-negative integer"
+            )
+
+        required_non_negative = (
+            self.monitoring_duration_seconds,
+            self.estimated_energy_joules,
+            self.estimated_energy_watt_hours,
+        )
+
+        if any(
+            type(value) not in (int, float)
+            or not isfinite(value)
+            or value < 0
+            for value in required_non_negative
+        ):
+            raise ValueError(
+                "GPU duration and energy values must be finite "
+                "non-negative numbers"
+            )
+
+        optional_metrics = (
+            self.mean_utilization_percent,
+            self.peak_utilization_percent,
+            self.mean_memory_used_mib,
+            self.peak_memory_used_mib,
+            self.mean_power_draw_watts,
+            self.peak_power_draw_watts,
+            self.mean_temperature_celsius,
+            self.peak_temperature_celsius,
+        )
+
+        for metric in optional_metrics:
+            if metric is not None and (
+                type(metric) not in (int, float)
+                or not isfinite(metric)
+                or metric < 0
+            ):
+                raise ValueError(
+                    "GPU statistics must be null or finite "
+                    "non-negative numbers"
+                )
+
+        utilization_metrics = (
+            self.mean_utilization_percent,
+            self.peak_utilization_percent,
+        )
+
+        if any(
+            metric is not None and metric > 100
+            for metric in utilization_metrics
+        ):
+            raise ValueError(
+                "GPU utilization statistics cannot exceed 100 percent"
+            )
+
+        if self.sample_count == 0:
+            if any(metric is not None for metric in optional_metrics):
+                raise ValueError(
+                    "GPU statistics must be null when sample_count is zero"
+                )
+
+            if (
+                self.monitoring_duration_seconds != 0
+                or self.estimated_energy_joules != 0
+                or self.estimated_energy_watt_hours != 0
+            ):
+                raise ValueError(
+                    "GPU duration and energy must be zero when "
+                    "sample_count is zero"
+                )
+
+        if self.sample_count > 0 and any(
+            metric is None for metric in optional_metrics
+        ):
+            raise ValueError(
+                "GPU statistics are required when sample_count is positive"
+            )
+
+
+@dataclass(frozen=True)
+class RealRequestSummary:
+    """Store aggregate request latency and TTFT metrics for one real run."""
+
+    total_requests: int
+    ttft_slo_seconds: float
+    ttft_slo_violation_count: int
+    ttft_slo_violation_rate: float
+    mean_scheduling_delay_seconds: float
+    mean_pre_inference_delay_seconds: float
+    mean_client_ttft_seconds: float
+    p50_client_ttft_seconds: float
+    p95_client_ttft_seconds: float
+    mean_end_to_end_ttft_seconds: float
+    p50_end_to_end_ttft_seconds: float
+    p95_end_to_end_ttft_seconds: float
+    mean_generation_duration_seconds: float
+    mean_client_latency_seconds: float
+    p50_client_latency_seconds: float
+    p95_client_latency_seconds: float
+    mean_end_to_end_latency_seconds: float
+    p50_end_to_end_latency_seconds: float
+    p95_end_to_end_latency_seconds: float
+
+    def __post_init__(self) -> None:
+        """Reject invalid aggregate request metrics."""
+
+        if type(self.total_requests) is not int or self.total_requests < 1:
+            raise ValueError(
+                "total_requests must be a positive integer"
+            )
+
+        if (
+            type(self.ttft_slo_seconds) not in (int, float)
+            or not isfinite(self.ttft_slo_seconds)
+            or self.ttft_slo_seconds <= 0
+        ):
+            raise ValueError(
+                "ttft_slo_seconds must be a finite positive number"
+            )
+
+        if (
+            type(self.ttft_slo_violation_count) is not int
+            or not 0
+            <= self.ttft_slo_violation_count
+            <= self.total_requests
+        ):
+            raise ValueError(
+                "ttft_slo_violation_count must be between zero "
+                "and total_requests"
+            )
+
+        if (
+            type(self.ttft_slo_violation_rate) not in (int, float)
+            or not isfinite(self.ttft_slo_violation_rate)
+            or not 0 <= self.ttft_slo_violation_rate <= 1
+        ):
+            raise ValueError(
+                "ttft_slo_violation_rate must be a finite number "
+                "between zero and one"
+            )
+
+        expected_violation_rate = (
+            self.ttft_slo_violation_count / self.total_requests
+        )
+
+        if abs(
+            self.ttft_slo_violation_rate - expected_violation_rate
+        ) > 1e-12:
+            raise ValueError(
+                "ttft_slo_violation_rate must match the violation count"
+            )
+
+        latency_metrics = (
+            self.mean_scheduling_delay_seconds,
+            self.mean_pre_inference_delay_seconds,
+            self.mean_client_ttft_seconds,
+            self.p50_client_ttft_seconds,
+            self.p95_client_ttft_seconds,
+            self.mean_end_to_end_ttft_seconds,
+            self.p50_end_to_end_ttft_seconds,
+            self.p95_end_to_end_ttft_seconds,
+            self.mean_generation_duration_seconds,
+            self.mean_client_latency_seconds,
+            self.p50_client_latency_seconds,
+            self.p95_client_latency_seconds,
+            self.mean_end_to_end_latency_seconds,
+            self.p50_end_to_end_latency_seconds,
+            self.p95_end_to_end_latency_seconds,
+        )
+
+        if any(
+            type(metric) not in (int, float)
+            or not isfinite(metric)
+            or metric < 0
+            for metric in latency_metrics
+        ):
+            raise ValueError(
+                "aggregate request metrics must be finite "
+                "non-negative numbers"
+            )
+
+
+@dataclass(frozen=True)
+class RealPolicySummary:
+    """Combine request, startup, and GPU metrics for one policy run."""
+
+    policy_name: str
+    experiment_duration_seconds: float
+    request_summary: RealRequestSummary
+    startup_summary: RealStartupSummary
+    gpu_summary: RealGPUSummary
+
+    def __post_init__(self) -> None:
+        """Reject inconsistent policy summary values."""
+
+        if not isinstance(self.policy_name, str) or not self.policy_name.strip():
+            raise ValueError(
+                "policy_name must be a non-empty string"
+            )
+
+        if (
+            type(self.experiment_duration_seconds) not in (int, float)
+            or not isfinite(self.experiment_duration_seconds)
+            or self.experiment_duration_seconds < 0
+        ):
+            raise ValueError(
+                "experiment_duration_seconds must be a finite "
+                "non-negative number"
+            )
+
+        if not isinstance(self.request_summary, RealRequestSummary):
+            raise ValueError(
+                "request_summary must be a RealRequestSummary object"
+            )
+
+        if not isinstance(self.startup_summary, RealStartupSummary):
+            raise ValueError(
+                "startup_summary must be a RealStartupSummary object"
+            )
+
+        if not isinstance(self.gpu_summary, RealGPUSummary):
+            raise ValueError(
+                "gpu_summary must be a RealGPUSummary object"
+            )
+
+        if (
+            self.request_summary.total_requests
+            != self.startup_summary.total_requests
+        ):
+            raise ValueError(
+                "request and startup summaries must have the same "
+                "total request count"
+            )
+
 
 def _seconds_since(
       timestamp_seconds: float,
@@ -176,6 +528,53 @@ def _seconds_since(
         )
 
     return float(timestamp_seconds - origin_seconds)
+
+def _percentile(
+    values: list[float],
+    fraction: float,
+) -> float:
+    """Calculate one percentile using linear interpolation."""
+
+    if not values:
+        raise ValueError(
+            "values must not be empty"
+        )
+
+    if any(
+        type(value) not in (int, float)
+        or not isfinite(value)
+        or value < 0
+        for value in values
+    ):
+        raise ValueError(
+            "values must contain finite non-negative numbers"
+        )
+
+    if (
+        type(fraction) not in (int, float)
+        or not isfinite(fraction)
+        or not 0 <= fraction <= 1
+    ):
+        raise ValueError(
+            "fraction must be a finite number between zero and one"
+        )
+
+    ordered = sorted(values)
+
+    position = (len(ordered) - 1) * fraction
+
+    lower_index = floor(position)
+    upper_index = min(
+        lower_index + 1,
+        len(ordered) - 1,
+    )
+
+    weight = position - lower_index
+
+    return (
+        ordered[lower_index] * (1 - weight)
+        + ordered[upper_index] * weight
+    )
 
 def normalize_run_timeline(
         run_result: RealPolicyRunResult,
@@ -279,7 +678,6 @@ def normalize_run_timeline(
 def calculate_request_metrics(
     run_result: RealPolicyRunResult,
 ) -> tuple[RealRequestMetrics, ...]:
-    """Calculate comparable metrics for every request in a real run."""
 
     if not isinstance(run_result, RealPolicyRunResult):
         raise ValueError(
@@ -324,4 +722,324 @@ def calculate_request_metrics(
 
     return tuple(request_metrics_list)
 
+def summarize_startups(
+    run_result: RealPolicyRunResult,
+) -> RealStartupSummary:
+    """Summarize cold starts and vLLM startup durations for one run."""
 
+    if not isinstance(run_result, RealPolicyRunResult):
+        raise ValueError(
+            "run_result must be a RealPolicyRunResult object"
+        )
+
+    total_requests = len(run_result.request_results)
+
+    cold_start_count = sum(
+        request_result.cold_start
+        for request_result in run_result.request_results
+    )
+
+    startup_durations: list[float] = []
+
+    for startup_result in run_result.startup_results:
+        startup_durations.append(
+            startup_result.startup_duration_seconds
+        )
+
+    startup_count = len(startup_durations)
+
+    total_startup_time_seconds = sum(startup_durations)
+
+    if startup_count == 0:
+        mean_startup_time_seconds = None
+        p50_startup_time_seconds = None
+        p95_startup_time_seconds = None
+    else:
+        mean_startup_time_seconds = (
+            total_startup_time_seconds / startup_count
+        )
+        p50_startup_time_seconds = _percentile(
+            startup_durations,
+            0.50,
+        )
+        p95_startup_time_seconds = _percentile(
+            startup_durations,
+            0.95,
+        )
+
+    return RealStartupSummary(
+        total_requests=total_requests,
+        cold_start_count=cold_start_count,
+        cold_start_rate=(
+            cold_start_count / total_requests
+        ),
+        startup_count=startup_count,
+        total_startup_time_seconds=(
+            total_startup_time_seconds
+        ),
+        mean_startup_time_seconds=(
+            mean_startup_time_seconds
+        ),
+        p50_startup_time_seconds=(
+            p50_startup_time_seconds
+        ),
+        p95_startup_time_seconds=(
+            p95_startup_time_seconds
+        ),
+    )
+
+
+def summarize_gpu_usage(
+    run_result: RealPolicyRunResult,
+) -> RealGPUSummary:
+    """Summarize GPU samples and estimate energy with trapezoidal integration."""
+
+    if not isinstance(run_result, RealPolicyRunResult):
+        raise ValueError(
+            "run_result must be a RealPolicyRunResult object"
+        )
+
+    samples = run_result.gpu_samples
+    sample_count = len(samples)
+
+    if sample_count == 0:
+        return RealGPUSummary(
+            sample_count=0,
+            monitoring_duration_seconds=0.0,
+            mean_utilization_percent=None,
+            peak_utilization_percent=None,
+            mean_memory_used_mib=None,
+            peak_memory_used_mib=None,
+            mean_power_draw_watts=None,
+            peak_power_draw_watts=None,
+            mean_temperature_celsius=None,
+            peak_temperature_celsius=None,
+            estimated_energy_joules=0.0,
+            estimated_energy_watt_hours=0.0,
+        )
+
+    for current, following in zip(samples, samples[1:]):
+        if current.sampled_at_seconds > following.sampled_at_seconds:
+            raise ValueError(
+                "GPU samples must be ordered by sampled_at_seconds"
+            )
+
+    utilization_values = [
+        sample.utilization_percent
+        for sample in samples
+    ]
+    memory_values = [
+        sample.memory_used_mib
+        for sample in samples
+    ]
+    power_values = [
+        sample.power_draw_watts
+        for sample in samples
+    ]
+    temperature_values = [
+        sample.temperature_celsius
+        for sample in samples
+    ]
+
+    monitoring_duration_seconds = (
+        samples[-1].sampled_at_seconds
+        - samples[0].sampled_at_seconds
+    )
+
+    # Estimate energy between each pair of samples. The average of the two
+    # power readings approximates the area under the power-versus-time curve.
+    estimated_energy_joules = 0.0
+
+    for current, following in zip(samples, samples[1:]):
+        interval_seconds = (
+            following.sampled_at_seconds
+            - current.sampled_at_seconds
+        )
+        average_interval_power_watts = (
+            current.power_draw_watts
+            + following.power_draw_watts
+        ) / 2
+        estimated_energy_joules += (
+            average_interval_power_watts * interval_seconds
+        )
+
+    return RealGPUSummary(
+        sample_count=sample_count,
+        monitoring_duration_seconds=monitoring_duration_seconds,
+        mean_utilization_percent=(
+            sum(utilization_values) / sample_count
+        ),
+        peak_utilization_percent=max(utilization_values),
+        mean_memory_used_mib=sum(memory_values) / sample_count,
+        peak_memory_used_mib=max(memory_values),
+        mean_power_draw_watts=sum(power_values) / sample_count,
+        peak_power_draw_watts=max(power_values),
+        mean_temperature_celsius=(
+            sum(temperature_values) / sample_count
+        ),
+        peak_temperature_celsius=max(temperature_values),
+        estimated_energy_joules=estimated_energy_joules,
+        estimated_energy_watt_hours=(
+            estimated_energy_joules / 3600.0
+        ),
+    )
+
+
+def summarize_request_metrics(
+    request_metrics: tuple[RealRequestMetrics, ...],
+    *,
+    ttft_slo_seconds: float,
+) -> RealRequestSummary:
+    """Aggregate request-level metrics into one latency summary."""
+
+    if (
+        not isinstance(request_metrics, tuple)
+        or not request_metrics
+        or not all(
+            isinstance(metric, RealRequestMetrics)
+            for metric in request_metrics
+        )
+    ):
+        raise ValueError(
+            "request_metrics must be a non-empty tuple of "
+            "RealRequestMetrics objects"
+        )
+
+    if (
+        type(ttft_slo_seconds) not in (int, float)
+        or not isfinite(ttft_slo_seconds)
+        or ttft_slo_seconds <= 0
+    ):
+        raise ValueError(
+            "ttft_slo_seconds must be a finite positive number"
+        )
+
+    total_requests = len(request_metrics)
+
+    scheduling_delays = [
+        metric.scheduling_delay_seconds
+        for metric in request_metrics
+    ]
+    pre_inference_delays = [
+        metric.pre_inference_delay_seconds
+        for metric in request_metrics
+    ]
+    client_ttfts = [
+        metric.client_ttft_seconds
+        for metric in request_metrics
+    ]
+    end_to_end_ttfts = [
+        metric.end_to_end_ttft_seconds
+        for metric in request_metrics
+    ]
+    generation_durations = [
+        metric.generation_duration_seconds
+        for metric in request_metrics
+    ]
+    client_latencies = [
+        metric.client_latency_seconds
+        for metric in request_metrics
+    ]
+    end_to_end_latencies = [
+        metric.end_to_end_latency_seconds
+        for metric in request_metrics
+    ]
+
+    # A request violates the TTFT SLO only when it exceeds the threshold.
+    ttft_slo_violation_count = sum(
+        ttft > ttft_slo_seconds
+        for ttft in end_to_end_ttfts
+    )
+
+    return RealRequestSummary(
+        total_requests=total_requests,
+        ttft_slo_seconds=float(ttft_slo_seconds),
+        ttft_slo_violation_count=ttft_slo_violation_count,
+        ttft_slo_violation_rate=(
+            ttft_slo_violation_count / total_requests
+        ),
+        mean_scheduling_delay_seconds=(
+            sum(scheduling_delays) / total_requests
+        ),
+        mean_pre_inference_delay_seconds=(
+            sum(pre_inference_delays) / total_requests
+        ),
+        mean_client_ttft_seconds=(
+            sum(client_ttfts) / total_requests
+        ),
+        p50_client_ttft_seconds=_percentile(
+            client_ttfts,
+            0.50,
+        ),
+        p95_client_ttft_seconds=_percentile(
+            client_ttfts,
+            0.95,
+        ),
+        mean_end_to_end_ttft_seconds=(
+            sum(end_to_end_ttfts) / total_requests
+        ),
+        p50_end_to_end_ttft_seconds=_percentile(
+            end_to_end_ttfts,
+            0.50,
+        ),
+        p95_end_to_end_ttft_seconds=_percentile(
+            end_to_end_ttfts,
+            0.95,
+        ),
+        mean_generation_duration_seconds=(
+            sum(generation_durations) / total_requests
+        ),
+        mean_client_latency_seconds=(
+            sum(client_latencies) / total_requests
+        ),
+        p50_client_latency_seconds=_percentile(
+            client_latencies,
+            0.50,
+        ),
+        p95_client_latency_seconds=_percentile(
+            client_latencies,
+            0.95,
+        ),
+        mean_end_to_end_latency_seconds=(
+            sum(end_to_end_latencies) / total_requests
+        ),
+        p50_end_to_end_latency_seconds=_percentile(
+            end_to_end_latencies,
+            0.50,
+        ),
+        p95_end_to_end_latency_seconds=_percentile(
+            end_to_end_latencies,
+            0.95,
+        ),
+    )
+
+
+def summarize_policy_run(
+    run_result: RealPolicyRunResult,
+    *,
+    ttft_slo_seconds: float,
+) -> RealPolicySummary:
+    """Build the complete comparable summary for one real policy run."""
+
+    if not isinstance(run_result, RealPolicyRunResult):
+        raise ValueError(
+            "run_result must be a RealPolicyRunResult object"
+        )
+
+    request_metrics = calculate_request_metrics(run_result)
+    request_summary = summarize_request_metrics(
+        request_metrics,
+        ttft_slo_seconds=ttft_slo_seconds,
+    )
+    startup_summary = summarize_startups(run_result)
+    gpu_summary = summarize_gpu_usage(run_result)
+
+    return RealPolicySummary(
+        policy_name=run_result.policy_name,
+        experiment_duration_seconds=(
+            run_result.experiment_duration_seconds
+        ),
+        request_summary=request_summary,
+        startup_summary=startup_summary,
+        gpu_summary=gpu_summary,
+    )
