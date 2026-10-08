@@ -2,8 +2,42 @@
 
 import json # convert pythone dict into json
 import csv
+from dataclasses import asdict, dataclass
 from io import StringIO
 from pathlib import Path # 문자열 대신 파일 경로를 나타내는 객체
+
+from serverless_llm.real_metrics import (
+    RealPolicySummary,
+    calculate_request_metrics,
+    normalize_run_timeline,
+)
+from serverless_llm.real_policy_runner import (
+    RealPolicyRunResult,
+)
+
+REQUEST_FIELDNAMES = (
+    "request_id",
+    "prompt_id",
+    "cold_start",
+    "startup_duration_seconds",
+    "scheduling_delay_seconds",
+    "pre_inference_delay_seconds",
+    "client_ttft_seconds",
+    "end_to_end_ttft_seconds",
+    "generation_duration_seconds",
+    "client_latency_seconds",
+    "end_to_end_latency_seconds",
+    "finish_reason",
+)
+
+GPU_SAMPLE_FIELDNAMES = (
+    "sampled_at_seconds",
+    "gpu_index",
+    "utilization_percent",
+    "memory_used_mib",
+    "power_draw_watts",
+    "temperature_celsius",
+)
 
 class ResultWriterError(RuntimeError):
   """Rasied when an experiment result cannot be written"""
@@ -69,10 +103,21 @@ def write_json(
             f"Could not write JSON result: {error}"
         ) from error
 
+@dataclass(frozen=True)
+class PolicyResultPaths:
+    """Store every artifact path created for one policy run."""
+
+    output_directory: Path
+    requests_csv: Path
+    gpu_samples_csv: Path
+    timeline_json: Path
+    summary_json: Path
+
+
 def write_csv(
       output_path: Path,
-    fieldnames: tuple[str, ...],
-    rows: list[dict[str, object]],
+    fieldnames: tuple[str, ...], # CSV Column
+    rows: list[dict[str, object]], # 한 딕셔너리가 csv 한 행이된다
 ) -> None:
     """Write dictionary rows to a new CSV file."""
 
@@ -100,6 +145,7 @@ def write_csv(
             "non-empty strings"
         )
 
+    # 겹치는 key 값이 있으면 지움 set 은 중복허용 x
     if len(fieldnames) != len(set(fieldnames)):
         raise ValueError(
             "fieldnames must not contain duplicates"
@@ -118,20 +164,24 @@ def write_csv(
 
     expected_fields = set(fieldnames)
 
+    # Require every row to contain exactly the configured CSV fields.
     for row in rows:
         if set(row) != expected_fields:
             raise ValueError(
                 "every row must contain exactly the configured fields"
             )
 
+
     try:
         csv_buffer = StringIO(newline="")
 
+        # connect keys in dict to CSV column
         writer = csv.DictWriter(
             csv_buffer,
             fieldnames=fieldnames,
         )
 
+        # 첫 줄을 작성 request_id,cold_start,end_to_end_ttft_seconds
         writer.writeheader()
         writer.writerows(rows)
 
@@ -143,9 +193,12 @@ def write_csv(
         ) from error
 
     try:
+        # output_path 가 "results/run-001/always_on/repetition-001/requests.csv" 일때
+        # .parent 을 하면 results/run-001/always_on/repetition-001 이 부분을 뜻함
+        # parent.parent 할쑤록 한 단계씩 올라간다
         output_path.parent.mkdir(
-            parents=True,
-            exist_ok=True,
+            parents=True, # 필요하면 상위 디렉터리까지 생성
+            exist_ok=True, # 생성하려는 디렉토리가 있어도 오류 발생 x
         )
 
         with output_path.open(
@@ -164,3 +217,121 @@ def write_csv(
         raise ResultWriterError(
             f"Could not write CSV result: {error}"
         ) from error
+
+def write_policy_results(
+    output_directory: Path,
+    run_result: RealPolicyRunResult,
+    policy_summary: RealPolicySummary,
+) -> PolicyResultPaths:
+    """Write every artifact belonging to one real policy run."""
+
+    if not isinstance(output_directory, Path):
+        raise ValueError(
+            "output_directory must be a Path object"
+        )
+
+    if (
+        output_directory.exists()
+        and not output_directory.is_dir()
+    ):
+        raise ValueError(
+            "output_directory must be a directory path"
+        )
+
+    if not isinstance(run_result, RealPolicyRunResult):
+        raise ValueError(
+            "run_result must be a RealPolicyRunResult object"
+        )
+
+    if not isinstance(policy_summary, RealPolicySummary):
+        raise ValueError(
+            "policy_summary must be a RealPolicySummary object"
+        )
+
+    if run_result.policy_name != policy_summary.policy_name:
+        raise ValueError(
+            "run_result and policy_summary must use the same policy"
+        )
+
+    if (
+        len(run_result.request_results)
+        != policy_summary.request_summary.total_requests
+    ):
+        raise ValueError(
+            "run_result and policy_summary must contain the same "
+            "number of requests"
+        )
+
+    paths = PolicyResultPaths(
+        output_directory=output_directory,
+        requests_csv=output_directory / "requests.csv",
+        gpu_samples_csv=output_directory / "gpu_samples.csv",
+        timeline_json=output_directory / "timeline.json",
+        summary_json=output_directory / "summary.json",
+    )
+
+    artifact_paths = (
+        paths.requests_csv,
+        paths.gpu_samples_csv,
+        paths.timeline_json,
+        paths.summary_json,
+    )
+
+    existing_paths = [
+        path
+        for path in artifact_paths
+        if path.exists()
+    ]
+
+    if existing_paths:
+        formatted_paths = ", ".join(
+            str(path)
+            for path in existing_paths
+        )
+
+        raise ResultWriterError(
+            f"Result artifacts already exist: {formatted_paths}"
+        )
+
+    timeline = normalize_run_timeline(run_result)
+
+    request_metrics = calculate_request_metrics(
+        run_result
+    )
+
+    request_rows = [
+        asdict(metric)
+        for metric in request_metrics
+    ]
+
+    gpu_sample_rows = [
+        asdict(sample)
+        for sample in timeline.gpu_samples
+    ]
+
+    timeline_data = asdict(timeline)
+    summary_data = asdict(policy_summary)
+
+    write_csv(
+        paths.requests_csv,
+        REQUEST_FIELDNAMES,
+        request_rows,
+    )
+
+    write_csv(
+        paths.gpu_samples_csv,
+        GPU_SAMPLE_FIELDNAMES,
+        gpu_sample_rows,
+    )
+
+    write_json(
+        paths.timeline_json,
+        timeline_data,
+    )
+
+    write_json(
+        paths.summary_json,
+        summary_data,
+    )
+
+    return paths
