@@ -26,3 +26,4 @@ addopts = "-ra"
 
 [project.scripts]
 serverless-llm-check = "serverless_llm.cli:main"
+serverless-llm-run = "serverless_llm.experiment_cli:main"

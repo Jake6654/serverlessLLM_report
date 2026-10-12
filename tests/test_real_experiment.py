@@ -12,8 +12,12 @@ from serverless_llm.gpu_monitor import GPUMonitor
 from serverless_llm.real_experiment import (
     RealExperimentError,
     RealExperimentComponents,
+    RealExperimentResult,
     build_components,
+    build_repetition_output_directory,
     build_workload,
+    execute_policy_experiment,
+    execute_policy_repetitions,
     run_real_policy,
 )
 from serverless_llm.vllm_client import VLLMClient
@@ -328,3 +332,361 @@ def test_run_real_policy_rejects_invalid_policy_name(
             experiment_components,
             workload_trace,
         )
+
+
+def test_execute_policy_experiment_runs_complete_pipeline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Build, execute, summarize, and save one policy run in order."""
+
+    trace = object()
+    components = object()
+    run_result = object()
+    summary = object()
+    paths = object()
+    calls: list[tuple[str, object]] = []
+
+    def fake_build_workload(config: object) -> object:
+        calls.append(("build_workload", config))
+        return trace
+
+    def fake_build_components(config: object) -> object:
+        calls.append(("build_components", config))
+        return components
+
+    def fake_run_real_policy(**kwargs: object) -> object:
+        calls.append(("run_real_policy", kwargs))
+        return run_result
+
+    def fake_summarize_policy_run(
+        received_run_result: object,
+        *,
+        ttft_slo_seconds: float,
+    ) -> object:
+        calls.append(
+            (
+                "summarize_policy_run",
+                (received_run_result, ttft_slo_seconds),
+            )
+        )
+        return summary
+
+    def fake_write_policy_results(**kwargs: object) -> object:
+        calls.append(("write_policy_results", kwargs))
+        return paths
+
+    monkeypatch.setattr(
+        experiment_module,
+        "build_workload",
+        fake_build_workload,
+    )
+    monkeypatch.setattr(
+        experiment_module,
+        "build_components",
+        fake_build_components,
+    )
+    monkeypatch.setattr(
+        experiment_module,
+        "run_real_policy",
+        fake_run_real_policy,
+    )
+    monkeypatch.setattr(
+        experiment_module,
+        "summarize_policy_run",
+        fake_summarize_policy_run,
+    )
+    monkeypatch.setattr(
+        experiment_module,
+        "write_policy_results",
+        fake_write_policy_results,
+    )
+
+    output_directory = tmp_path / "always_on" / "repetition-001"
+
+    result = execute_policy_experiment(
+        policy_name="always_on",
+        config=experiment_config,
+        output_directory=output_directory,
+    )
+
+    assert isinstance(result, RealExperimentResult)
+    assert result.run_result is run_result
+    assert result.summary is summary
+    assert result.paths is paths
+    assert calls == [
+        ("build_workload", experiment_config),
+        ("build_components", experiment_config),
+        (
+            "run_real_policy",
+            {
+                "policy_name": "always_on",
+                "config": experiment_config,
+                "components": components,
+                "trace": trace,
+            },
+        ),
+        (
+            "summarize_policy_run",
+            (run_result, 1.0),
+        ),
+        (
+            "write_policy_results",
+            {
+                "output_directory": output_directory,
+                "run_result": run_result,
+                "policy_summary": summary,
+            },
+        ),
+    ]
+
+
+def test_execute_policy_experiment_rejects_non_config_object(
+    tmp_path: Path,
+) -> None:
+    """Reject invalid configuration before starting an experiment."""
+
+    with pytest.raises(
+        ValueError,
+        match="config must be an ExperimentConfig object",
+    ):
+        execute_policy_experiment(
+            policy_name="always_on",
+            config="configs/experiment.yaml",
+            output_directory=tmp_path,
+        )
+
+
+def test_execute_policy_experiment_rejects_non_path_output(
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Require a Path object for the result directory."""
+
+    with pytest.raises(
+        ValueError,
+        match="output_directory must be a Path object",
+    ):
+        execute_policy_experiment(
+            policy_name="always_on",
+            config=experiment_config,
+            output_directory="results/always_on",
+        )
+
+
+def test_execute_policy_experiment_rejects_existing_file_path(
+    tmp_path: Path,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Reject a regular file where a result directory is required."""
+
+    output_file = tmp_path / "not-a-directory"
+    output_file.write_text("existing file", encoding="utf-8")
+
+    with pytest.raises(
+        ValueError,
+        match="output_directory must be a directory path",
+    ):
+        execute_policy_experiment(
+            policy_name="always_on",
+            config=experiment_config,
+            output_directory=output_file,
+        )
+
+
+def test_build_repetition_output_directory_formats_path(
+    tmp_path: Path,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Build a stable experiment, policy, and repetition hierarchy."""
+
+    output_config = replace(
+        experiment_config.output,
+        results_directory=tmp_path / "results",
+    )
+    config = replace(
+        experiment_config,
+        output=output_config,
+    )
+
+    output_directory = build_repetition_output_directory(
+        config=config,
+        policy_name="always_on",
+        repetition=2,
+    )
+
+    assert output_directory == (
+        tmp_path
+        / "results"
+        / "traffic-aware-serverless-llm"
+        / "always_on"
+        / "repetition-002"
+    )
+
+
+@pytest.mark.parametrize("repetition", [0, 4])
+def test_build_repetition_output_directory_rejects_out_of_range_value(
+    repetition: int,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Require repetitions to remain within configured run bounds."""
+
+    with pytest.raises(
+        ValueError,
+        match="repetition must be between 1 and 3",
+    ):
+        build_repetition_output_directory(
+            config=experiment_config,
+            policy_name="always_on",
+            repetition=repetition,
+        )
+
+
+@pytest.mark.parametrize("repetition", [1.0, True, "1"])
+def test_build_repetition_output_directory_rejects_non_integer(
+    repetition: object,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Reject non-integer repetition identifiers, including booleans."""
+
+    with pytest.raises(
+        ValueError,
+        match="repetition must be an integer",
+    ):
+        build_repetition_output_directory(
+            config=experiment_config,
+            policy_name="always_on",
+            repetition=repetition,
+        )
+
+
+def test_build_repetition_output_directory_rejects_unknown_policy(
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Reject result paths for policies without real implementations."""
+
+    with pytest.raises(
+        RealExperimentError,
+        match="unsupported real policy: ml_based",
+    ):
+        build_repetition_output_directory(
+            config=experiment_config,
+            policy_name="ml_based",
+            repetition=1,
+        )
+
+
+def test_execute_policy_repetitions_runs_every_configured_repetition(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Execute one isolated policy run for every configured repetition."""
+
+    output_config = replace(
+        experiment_config.output,
+        results_directory=tmp_path / "results",
+    )
+    config = replace(
+        experiment_config,
+        output=output_config,
+    )
+    produced_results = [object(), object(), object()]
+    received_calls: list[dict[str, object]] = []
+
+    def fake_execute_policy_experiment(
+        **kwargs: object,
+    ) -> object:
+        received_calls.append(kwargs)
+        return produced_results[len(received_calls) - 1]
+
+    monkeypatch.setattr(
+        experiment_module,
+        "execute_policy_experiment",
+        fake_execute_policy_experiment,
+    )
+
+    results = execute_policy_repetitions(
+        policy_name="always_on",
+        config=config,
+    )
+
+    policy_directory = (
+        tmp_path
+        / "results"
+        / "traffic-aware-serverless-llm"
+        / "always_on"
+    )
+
+    assert results == tuple(produced_results)
+    assert received_calls == [
+        {
+            "policy_name": "always_on",
+            "config": config,
+            "output_directory": (
+                policy_directory / "repetition-001"
+            ),
+        },
+        {
+            "policy_name": "always_on",
+            "config": config,
+            "output_directory": (
+                policy_directory / "repetition-002"
+            ),
+        },
+        {
+            "policy_name": "always_on",
+            "config": config,
+            "output_directory": (
+                policy_directory / "repetition-003"
+            ),
+        },
+    ]
+
+
+def test_execute_policy_repetitions_rejects_existing_directory_before_run(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    experiment_config: ExperimentConfig,
+) -> None:
+    """Protect existing results before starting any expensive GPU run."""
+
+    output_config = replace(
+        experiment_config.output,
+        results_directory=tmp_path / "results",
+    )
+    config = replace(
+        experiment_config,
+        output=output_config,
+    )
+    existing_directory = build_repetition_output_directory(
+        config=config,
+        policy_name="always_on",
+        repetition=1,
+    )
+    existing_directory.mkdir(parents=True)
+    execution_count = 0
+
+    def fake_execute_policy_experiment(
+        **kwargs: object,
+    ) -> object:
+        nonlocal execution_count
+        execution_count += 1
+        return object()
+
+    monkeypatch.setattr(
+        experiment_module,
+        "execute_policy_experiment",
+        fake_execute_policy_experiment,
+    )
+
+    with pytest.raises(
+        RealExperimentError,
+        match="experiment result directories already exist",
+    ):
+        execute_policy_repetitions(
+            policy_name="always_on",
+            config=config,
+        )
+
+    assert execution_count == 0
