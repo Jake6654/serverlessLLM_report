@@ -1,0 +1,17 @@
+# Fast end-to-end validation before spending time on the report suite.
+suite:
+  name: traffic-aware-serverless-llm-pilot-v2
+  repetitions: 1
+  random_seed: 42
+  policies:
+    - always_on
+    - naive_serverless
+    - fixed_keep_warm
+
+base_config: experiment.yaml
+
+workloads:
+  - name: dense-5s
+    request_interval_seconds: 5.0
+    total_requests: 3
+

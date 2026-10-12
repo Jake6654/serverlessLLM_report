@@ -34,6 +34,9 @@ class RuntimeStartupResult:
 class DockerVLLMRuntime:
     """Start, inspect, and stop one Dockerized vLLM server."""
 
+    _REMOVAL_TIMEOUT_SECONDS = 15.0
+    _REMOVAL_POLL_INTERVAL_SECONDS = 0.1
+
     # Store validated configuration objects so every lifecycle operation uses
     # the same image, container name, network address, and timeout settings.
     def __init__(
@@ -159,29 +162,81 @@ class DockerVLLMRuntime:
             == self._docker_config.container_name
         )
 
-    # Make cleanup idempotent. Calling stop more than once is safe because an
-    # already stopped container returns immediately without another command.
-    def stop(self) -> None:
-        """Stop the container if running and otherwise return immediately."""
+    def _container_exists(self) -> bool:
+        """Return True while Docker still owns the configured name.
 
-        if not self.is_running:
-            return
+        ``docker ps`` only lists running containers.  This check adds
+        ``--all`` because an exited ``--rm`` container can remain briefly
+        while Docker finishes asynchronous cleanup.
+        """
 
         completed = self._run_docker_command(
-            # -> subprocess.run(["docker", "stop", "serverless-llm-vllm"])
-            # 실행 프로그램 docker, docker subcommand: stop, argument: serverless-llm-vllm
             [
                 "docker",
-                "stop",
-                self._docker_config.container_name,
+                "ps",
+                "--all",
+                "--filter",
+                f"name=^/{self._docker_config.container_name}$",
+                "--format",
+                "{{.Names}}",
             ]
         )
 
         if completed.returncode != 0:
             raise DockerRuntimeError(
-                "Could not stop the vLLM container: "
+                "Could not inspect all Docker containers: "
                 f"{completed.stderr.strip()}"
             )
+
+        return (
+            completed.stdout.strip()
+            == self._docker_config.container_name
+        )
+
+    def _wait_until_removed(self) -> None:
+        """Wait until Docker releases the name used by the container."""
+
+        deadline = time.monotonic() + self._REMOVAL_TIMEOUT_SECONDS
+
+        while self._container_exists():
+            if time.monotonic() >= deadline:
+                raise DockerRuntimeError(
+                    "Docker did not remove the vLLM container within "
+                    f"{self._REMOVAL_TIMEOUT_SECONDS} seconds"
+                )
+
+            time.sleep(self._REMOVAL_POLL_INTERVAL_SECONDS)
+
+    # Stop is not complete until Docker releases the container name. This is
+    # especially important for Naive Serverless, which may stop and restart
+    # vLLM immediately when a request is already overdue after model loading.
+    def stop(self) -> None:
+        """Stop/remove the container and wait for its name to be reusable."""
+
+        if not self._container_exists():
+            return
+
+        action = "stop" if self.is_running else "rm"
+        completed = self._run_docker_command(
+            [
+                "docker",
+                action,
+                self._docker_config.container_name,
+            ]
+        )
+
+        if completed.returncode != 0:
+            # The --rm cleanup can win the race between inspection and the
+            # command. Treat that as success only when the name is now gone.
+            if not self._container_exists():
+                return
+
+            raise DockerRuntimeError(
+                f"Could not {action} the vLLM container: "
+                f"{completed.stderr.strip()}"
+            )
+
+        self._wait_until_removed()
 
     # Connection failures are expected while vLLM loads. Treat them as "not
     # ready yet" and let wait_until_ready retry until the startup deadline.

@@ -1,5 +1,9 @@
 # Traffic-Aware Serverless LLM Inference
 
+For the AWS pilot, balanced policy suite, reproducibility artifacts, and
+report-generation commands, see
+[`REPORT_EXPERIMENT_GUIDE.md`](REPORT_EXPERIMENT_GUIDE.md).
+
 This project compares five GPU warm-state management policies for LLM
 inference:
 

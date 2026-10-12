@@ -235,15 +235,12 @@ def test_is_running_reports_inspection_failure(
         _ = runtime.is_running
 
 
-def test_stop_stops_a_running_container(
+def test_container_exists_includes_stopped_containers(
     runtime: DockerVLLMRuntime,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     fake_run = Mock(
-        side_effect=[
-            completed_process(stdout="serverless-llm-vllm\n"),
-            completed_process(stdout="serverless-llm-vllm\n"),
-        ]
+        return_value=completed_process(stdout="serverless-llm-vllm\n")
     )
     monkeypatch.setattr(
         docker_runtime_module.subprocess,
@@ -251,28 +248,118 @@ def test_stop_stops_a_running_container(
         fake_run,
     )
 
-    assert runtime.stop() is None
-    assert fake_run.call_count == 2
-    assert fake_run.call_args_list[1].args[0] == [
+    assert runtime._container_exists() is True
+    assert fake_run.call_args.args[0] == [
         "docker",
-        "stop",
-        "serverless-llm-vllm",
+        "ps",
+        "--all",
+        "--filter",
+        "name=^/serverless-llm-vllm$",
+        "--format",
+        "{{.Names}}",
     ]
 
 
-def test_stop_is_no_op_when_container_is_not_running(
+def test_stop_stops_a_running_container(
     runtime: DockerVLLMRuntime,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    fake_run = Mock(return_value=completed_process(stdout=""))
+    container_exists = Mock(side_effect=[True, False])
+    run_command = Mock(return_value=completed_process())
+    monkeypatch.setattr(runtime, "_container_exists", container_exists)
+    monkeypatch.setattr(runtime, "_run_docker_command", run_command)
     monkeypatch.setattr(
-        docker_runtime_module.subprocess,
-        "run",
-        fake_run,
+        DockerVLLMRuntime,
+        "is_running",
+        PropertyMock(return_value=True),
     )
 
     assert runtime.stop() is None
-    fake_run.assert_called_once()
+    run_command.assert_called_once_with([
+        "docker",
+        "stop",
+        "serverless-llm-vllm",
+    ])
+    assert container_exists.call_count == 2
+
+
+def test_stop_removes_an_existing_stopped_container(
+    runtime: DockerVLLMRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_exists = Mock(side_effect=[True, False])
+    run_command = Mock(return_value=completed_process())
+    monkeypatch.setattr(runtime, "_container_exists", container_exists)
+    monkeypatch.setattr(runtime, "_run_docker_command", run_command)
+    monkeypatch.setattr(
+        DockerVLLMRuntime,
+        "is_running",
+        PropertyMock(return_value=False),
+    )
+
+    assert runtime.stop() is None
+    run_command.assert_called_once_with([
+        "docker",
+        "rm",
+        "serverless-llm-vllm",
+    ])
+
+
+def test_stop_is_no_op_when_container_does_not_exist(
+    runtime: DockerVLLMRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_exists = Mock(return_value=False)
+    run_command = Mock()
+    monkeypatch.setattr(runtime, "_container_exists", container_exists)
+    monkeypatch.setattr(runtime, "_run_docker_command", run_command)
+
+    assert runtime.stop() is None
+    run_command.assert_not_called()
+
+
+def test_stop_tolerates_auto_removal_race(
+    runtime: DockerVLLMRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    container_exists = Mock(side_effect=[True, False])
+    monkeypatch.setattr(runtime, "_container_exists", container_exists)
+    monkeypatch.setattr(
+        runtime,
+        "_run_docker_command",
+        Mock(
+            return_value=completed_process(
+                returncode=1,
+                stderr="No such container",
+            )
+        ),
+    )
+    monkeypatch.setattr(
+        DockerVLLMRuntime,
+        "is_running",
+        PropertyMock(return_value=True),
+    )
+
+    assert runtime.stop() is None
+
+
+def test_wait_until_removed_reports_timeout(
+    runtime: DockerVLLMRuntime,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runtime, "_container_exists", Mock(return_value=True))
+    monkeypatch.setattr(
+        docker_runtime_module.time,
+        "monotonic",
+        Mock(side_effect=[0.0, 1.0, 15.0]),
+    )
+    sleep = Mock()
+    monkeypatch.setattr(docker_runtime_module.time, "sleep", sleep)
+
+    with pytest.raises(DockerRuntimeError, match="did not remove"):
+        runtime._wait_until_removed()
+
+    sleep.assert_called_once_with(0.1)
 
 
 def test_is_ready_returns_true_for_http_200(

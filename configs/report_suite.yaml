@@ -1,0 +1,36 @@
+# Main baseline comparison for the research report.
+# Five repetitions permit variance and 95% confidence-interval reporting.
+suite:
+  name: traffic-aware-serverless-llm-report-v1
+  repetitions: 5
+  random_seed: 42
+  policies:
+    - always_on
+    - naive_serverless
+    - fixed_keep_warm
+
+base_config: experiment.yaml
+
+workloads:
+  # Requests arrive much faster than the 30-second keep-warm timeout.
+  - name: dense-5s
+    request_interval_seconds: 5.0
+    total_requests: 20
+
+  # Three boundary cases reveal behavior around the 30-second timeout.
+  - name: boundary-25s
+    request_interval_seconds: 25.0
+    total_requests: 8
+
+  - name: boundary-30s
+    request_interval_seconds: 30.0
+    total_requests: 8
+
+  - name: boundary-35s
+    request_interval_seconds: 35.0
+    total_requests: 8
+
+  # Requests arrive far beyond the keep-warm timeout.
+  - name: sparse-90s
+    request_interval_seconds: 90.0
+    total_requests: 6
