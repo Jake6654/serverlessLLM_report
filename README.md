@@ -217,6 +217,68 @@ window.
 | sparse-90s | Fixed Keep-Warm | 56.1430 ± 0.0378 | 1.000 | 1.000 | 0.7174 ± 0.0031 |
 | sparse-90s | Naive Serverless | 56.1372 ± 0.1039 | 1.000 | 1.000 | 0.7224 ± 0.0031 |
 
+### How to read the statistics
+
+`TTFT` (Time To First Token) is the time from request arrival until the first
+generated token reaches the client. `E2E` means that this measurement includes
+the complete user-visible path:
+
+```text
+E2E TTFT
+= queueing time
++ container startup and model loading
++ waiting for earlier requests
++ first-token generation time
+```
+
+`P95` is the 95th percentile. If P95 E2E TTFT is 2 seconds, approximately 95%
+of requests received their first token within 2 seconds, while the slowest 5%
+took longer. P95 describes slow-tail request behavior; it is not the same as
+the arithmetic mean.
+
+The table reports the **mean P95 across four repetitions**, followed by a
+normal-approximation 95% confidence-interval half-width:
+
+```text
+mean ± 95% CI half-width
+```
+
+For example, the four `boundary-25s / fixed_keep_warm` P95 measurements were:
+
+```text
+46.5655, 47.5014, 46.5489, 46.3956 seconds
+```
+
+Their arithmetic mean is:
+
+```text
+(46.5655 + 47.5014 + 46.5489 + 46.3956) / 4
+= 46.7528 seconds
+```
+
+The report calculates the half-width as:
+
+```text
+sample standard deviation = 0.504847 seconds
+standard error = 0.504847 / sqrt(4) = 0.252423 seconds
+95% CI half-width = 1.96 x 0.252423 = 0.494750 seconds
+```
+
+The final result is therefore:
+
+```text
+46.7528 ± 0.4947 seconds
+95% CI: [46.2581, 47.2476] seconds
+```
+
+P95 and the 95% confidence interval answer different questions: P95 describes
+the slow end of requests within a run, whereas the confidence interval
+describes uncertainty in the mean P95 across repeated runs. A smaller
+half-width means the repetitions were more consistent. Because this study has
+only four repetitions, the interval should be treated as an uncertainty signal
+rather than a definitive population bound. A small-sample Student's *t*
+interval would be wider than the current normal approximation.
+
 Across the 168 requests executed by each policy, the measured total GPU
 energy was 39.895 Wh for Always-On, 35.956 Wh for Fixed Keep-Warm, and
 88.846 Wh for Naive Serverless. These totals are descriptive rather than a
